@@ -1,4 +1,9 @@
-import { EventType, type MatrixClient } from "matrix-js-sdk";
+import {
+  EventType,
+  RoomCreateTypeField,
+  RoomType,
+  type MatrixClient,
+} from "matrix-js-sdk";
 
 import {
   compareRooms,
@@ -15,13 +20,29 @@ export interface SpaceChildRoomResult {
   warnings: string[];
 }
 
-export function getJoinedSpaces(client: MatrixClient): JoinedSpace[] {
-  return client
+export async function getJoinedSpaces(client: MatrixClient): Promise<JoinedSpace[]> {
+  const spaces = client
     .getRooms()
     .filter((room) => isJoinedRoom(room))
     .filter((room) => isSpaceRoom(room))
-    .map((room) => roomSummary(room))
-    .sort(compareRooms);
+    .map((room) => roomSummary(room));
+
+  const knownRoomIds = new Set(spaces.map((space) => space.roomId));
+  const joinedRoomIds = await getJoinedRoomIds(client);
+
+  for (const roomId of joinedRoomIds) {
+    if (knownRoomIds.has(roomId)) {
+      continue;
+    }
+
+    const space = await joinedSpaceFromServer(client, roomId);
+
+    if (space) {
+      spaces.push(space);
+    }
+  }
+
+  return spaces.sort(compareRooms);
 }
 
 export async function getSpaceChildRoomIds(
@@ -64,4 +85,45 @@ export async function getSpaceChildRoomIds(
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function getJoinedRoomIds(client: MatrixClient): Promise<Set<string>> {
+  const response = await client.getJoinedRooms();
+  return new Set(response.joined_rooms);
+}
+
+async function joinedSpaceFromServer(
+  client: MatrixClient,
+  roomId: string,
+): Promise<JoinedSpace | null> {
+  try {
+    const createContent = await client.getStateEvent(roomId, EventType.RoomCreate, "");
+
+    if (createContent[RoomCreateTypeField] !== RoomType.Space) {
+      return null;
+    }
+
+    const name = await getRoomNameFromServer(client, roomId);
+
+    return {
+      roomId,
+      name: name ?? roomId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function getRoomNameFromServer(
+  client: MatrixClient,
+  roomId: string,
+): Promise<string | null> {
+  try {
+    const content = await client.getStateEvent(roomId, EventType.RoomName, "");
+    const name = content.name;
+
+    return typeof name === "string" && name.trim().length > 0 ? name.trim() : null;
+  } catch {
+    return null;
+  }
 }

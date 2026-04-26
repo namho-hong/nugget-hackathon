@@ -5,6 +5,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  createDirectRoom,
+  createRoom,
+  createSpace,
   getJoinedDirectRooms,
   getJoinedSpaces,
   getSpaceChildRoomIds,
@@ -13,7 +16,7 @@ import {
   type LoginAction,
 } from "./matrix/index.js";
 import { clearSession, loadSession, saveSession } from "./store/index.js";
-import { selectHomeAction, type HomeAction } from "./ui/index.js";
+import { promptRequired, selectHomeAction, type HomeAction } from "./ui/index.js";
 
 type CommandResult = {
   exitCode: number;
@@ -33,6 +36,12 @@ Commands:
   login [action]    Start Matrix SSO. Action: login or register.
   logout            Clear the local Matrix session.
   whoami            Show the saved Matrix session identity.
+  create-workspace [name]
+                    Create a private Matrix Space.
+  create-room [name] [spaceId]
+                    Create a private Matrix room, optionally linked to a Space.
+  create-dm [userId]
+                    Create a direct room and invite a Matrix user.
 
 Planned:
   workspace
@@ -94,6 +103,18 @@ async function run(argv: string[]): Promise<CommandResult> {
     return handleWhoami();
   }
 
+  if (command === "create-workspace") {
+    return handleCreateWorkspaceCommand(args.slice(1));
+  }
+
+  if (command === "create-room") {
+    return handleCreateRoomCommand(args.slice(1));
+  }
+
+  if (command === "create-dm") {
+    return handleCreateDmCommand(args.slice(1));
+  }
+
   return {
     exitCode: 1,
     output: `Unknown command: ${command}\n\n${HELP_TEXT}`,
@@ -141,9 +162,9 @@ async function handleDefaultHome(): Promise<CommandResult> {
 
 async function selectHomeActionFromMatrix(): Promise<HomeAction> {
   return withMatrixClient(async (client) => {
-    const workspaces = getJoinedSpaces(client);
+    const workspaces = await getJoinedSpaces(client);
     const childRooms = await getSpaceChildRoomIds(client, workspaces);
-    const directMessages = getJoinedDirectRooms(client, {
+    const directMessages = await getJoinedDirectRooms(client, {
       excludeRoomIds: childRooms.roomIds,
     });
     return selectHomeAction({
@@ -190,10 +211,12 @@ async function handleHomeAction(action: HomeAction): Promise<CommandResult> {
   }
 
   if (action.type === "create-workspace") {
-    return plannedAction("New workspace creation is planned in the next phase.\n");
+    const name = await promptRequired("Workspace name");
+    return handleCreateWorkspace(name);
   }
 
-  return plannedAction("New DM creation is planned in the next phase.\n");
+  const userId = await promptRequired("Matrix user ID");
+  return handleCreateDm(userId);
 }
 
 function plannedAction(output: string): CommandResult {
@@ -219,6 +242,90 @@ async function handleWhoami(): Promise<CommandResult> {
     exitCode: 0,
     output: `${session.userId}\n${session.baseUrl}\n`,
     stream: "stdout",
+  };
+}
+
+async function handleCreateWorkspaceCommand(args: string[]): Promise<CommandResult> {
+  const name = args.length > 0 ? args.join(" ") : await promptRequired("Workspace name");
+  return handleCreateWorkspace(name);
+}
+
+async function handleCreateRoomCommand(args: string[]): Promise<CommandResult> {
+  const parsed = parseCreateRoomArgs(args);
+  const name = parsed.name ?? (await promptRequired("Room name"));
+
+  return handleCreateMatrixRoom(name, parsed.spaceId);
+}
+
+async function handleCreateDmCommand(args: string[]): Promise<CommandResult> {
+  const userId = args[0] ?? (await promptRequired("Matrix user ID"));
+  return handleCreateDm(userId);
+}
+
+async function handleCreateWorkspace(name: string): Promise<CommandResult> {
+  const created = await withMatrixClient(async (client) => createSpace(client, name));
+
+  return {
+    exitCode: 0,
+    output:
+      `Created workspace: ${created.name}\n` +
+      `Space ID: ${created.roomId}\n\n` +
+      "Workspace opening is planned in the cmux workspace phase.\n",
+    stream: "stdout",
+  };
+}
+
+async function handleCreateMatrixRoom(
+  name: string,
+  spaceId: string | undefined,
+): Promise<CommandResult> {
+  const created = await withMatrixClient(async (client) =>
+    createRoom(client, {
+      name,
+      ...(spaceId ? { spaceId } : {}),
+    }),
+  );
+
+  return {
+    exitCode: 0,
+    output:
+      `Created room: ${created.name}\n` +
+      `Room ID: ${created.roomId}\n` +
+      `${spaceId ? `Linked Space ID: ${spaceId}\n` : ""}\n` +
+      "Room opening is planned in the cmux workspace phase.\n",
+    stream: "stdout",
+  };
+}
+
+async function handleCreateDm(userId: string): Promise<CommandResult> {
+  const created = await withMatrixClient(async (client) => createDirectRoom(client, userId));
+
+  return {
+    exitCode: 0,
+    output:
+      `Created DM with: ${created.name}\n` +
+      `Room ID: ${created.roomId}\n\n` +
+      "DM chat opening is planned in the chat phase.\n",
+    stream: "stdout",
+  };
+}
+
+function parseCreateRoomArgs(args: string[]): { name?: string; spaceId?: string } {
+  if (args.length === 0) {
+    return {};
+  }
+
+  const lastArg = args.at(-1);
+
+  if (args.length > 1 && lastArg?.startsWith("!")) {
+    return {
+      name: args.slice(0, -1).join(" "),
+      spaceId: lastArg,
+    };
+  }
+
+  return {
+    name: args.join(" "),
   };
 }
 
