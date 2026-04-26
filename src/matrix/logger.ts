@@ -57,6 +57,10 @@ function isMatrixSdkConsoleLog(args: readonly unknown[]): boolean {
     first.startsWith("FetchHttpApi:") ||
     first.startsWith("sync ") ||
     first.startsWith("stopping MatrixClient") ||
+    (first.startsWith("Event ") && first.includes(" already in timeline ")) ||
+    first.startsWith("Got remote echo for event ") ||
+    first.startsWith("setting pendingEvent status ") ||
+    first.startsWith("Stopping queue '") ||
     first.startsWith("Attempting to send queued to-device messages") ||
     first.startsWith("All queued to-device messages sent") ||
     first.startsWith("Adding default global ") ||

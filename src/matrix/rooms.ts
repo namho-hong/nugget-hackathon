@@ -33,6 +33,30 @@ export function getJoinedRooms(
     .sort(compareRooms);
 }
 
+export function getRoomDisplayName(room: Room): string {
+  return resolveRoomName(room);
+}
+
+export function resolveRoomOrThrow(client: MatrixClient, roomId: string): Room {
+  const room = client.getRoom(roomId);
+
+  if (!room) {
+    throw new Error(
+      `Room ${roomId} is not visible in the synced client store. Join it first or run sync again.`,
+    );
+  }
+
+  if (!isJoinedRoom(room)) {
+    throw new Error(`Room ${roomId} is not joined by the current Matrix session.`);
+  }
+
+  if (isSpaceRoom(room)) {
+    throw new Error(`Room ${roomId} is a Matrix Space, not a chat room.`);
+  }
+
+  return room;
+}
+
 export async function getJoinedDirectRooms(
   client: MatrixClient,
   options: JoinedRoomOptions = {},
