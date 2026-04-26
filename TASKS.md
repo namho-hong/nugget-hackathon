@@ -1,3 +1,52 @@
+# DM Invite Accept Revalidation
+
+## Goal
+
+Make accepting a DM invite from the home menu work even when the follow-up
+Matrix sync cannot reclassify the invite as a one-to-one DM, or already reports
+the room as joined.
+
+## Definition of Done
+
+- [x] DM invite accept validates the target room by membership/room type instead
+  of requiring a second DM invite summary.
+- [x] Already-joined DM invite targets open as accepted instead of erroring.
+- [x] DM invite reject still rejects pending invite rooms when DM summary data is
+  incomplete.
+- [x] Focused tests cover fallback pending DM invite resolution.
+- [x] `pnpm build` passes.
+- [x] Relevant tests pass.
+- [x] `git diff --check` passes.
+
+## Checklist
+
+- [x] Inspect home invite action and Matrix pending invite code paths.
+- [x] Add a roomId-based pending DM invite fallback.
+- [x] Update accept/reject handlers to use the fallback and joined-room path.
+- [x] Add focused coverage.
+- [x] Run verification commands.
+
+## Verification Commands
+
+```sh
+pnpm build
+pnpm test
+git diff --check
+```
+
+## Current Status
+
+Implementation is complete with local verification:
+
+- `pnpm build`
+- `pnpm exec tsx --test tests/matrix-events.test.ts`
+- `pnpm test`
+- `git diff --check`
+
+DM invite accept/reject now revalidates the selected room ID directly. The home
+invite list still uses strict one-to-one DM detection, but accepting a displayed
+invite no longer fails just because a fresh sync cannot rebuild the same summary.
+
 # Left DM Home Refresh
 
 ## Goal

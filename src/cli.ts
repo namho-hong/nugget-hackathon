@@ -23,6 +23,7 @@ import {
   getJoinedSpaceRooms,
   getInviteViaServers,
   getRoomDisplayName,
+  getPendingDirectRoomInviteTarget,
   getPendingDirectRoomInvites,
   getJoinedSpaces,
   getSpaceDisplayName,
@@ -1153,21 +1154,27 @@ async function handleCreateDmInteractive(initialUserId?: string): Promise<Comman
 
 async function handleAcceptDmInvite(roomId: string): Promise<CommandResult> {
   const result = await withMatrixClient(async (client) => {
-    const invite = getPendingDirectRoomInvites(client).find((item) => item.roomId === roomId);
+    const invite = getPendingDirectRoomInviteTarget(client, roomId);
+    let joinedRoomId = roomId;
+    let directUserId = invite?.inviterUserId ?? null;
 
-    if (!invite) {
+    if (invite) {
+      joinedRoomId = await joinRoom(client, roomId, {
+        viaServers: getInviteViaServers(
+          client.getRoom(roomId),
+          directUserId ? [directUserId] : [],
+        ),
+      });
+      await dismissInviteRoom(roomId);
+    } else if (client.getRoom(roomId)?.getMyMembership() !== "join") {
       throw new Error(`DM invite ${roomId} is no longer pending.`);
     }
 
-    const joinedRoomId = await joinRoom(client, roomId, {
-      viaServers: getInviteViaServers(client.getRoom(roomId), [invite.inviterUserId]),
-    });
-    await dismissInviteRoom(roomId);
     const joinedRoom = await waitForJoinedRoom(client, joinedRoomId);
-    const directUserId = invite.inviterUserId;
     const currentUserId = client.getUserId();
+    directUserId ??= resolveOtherUserId(joinedRoom, currentUserId);
 
-    if (directUserId !== currentUserId) {
+    if (directUserId && directUserId !== currentUserId) {
       try {
         await addDirectRoomAccountData(client, directUserId, joinedRoom.roomId);
       } catch (error) {
@@ -1258,7 +1265,7 @@ async function handleRejectWorkspaceInvite(spaceId: string): Promise<CommandResu
 
 async function handleRejectDmInvite(roomId: string): Promise<CommandResult> {
   const result = await withMatrixClient(async (client) => {
-    const invite = getPendingDirectRoomInvites(client).find((item) => item.roomId === roomId);
+    const invite = getPendingDirectRoomInviteTarget(client, roomId);
 
     if (!invite) {
       throw new Error(`DM invite ${roomId} is no longer pending.`);
@@ -1266,7 +1273,9 @@ async function handleRejectDmInvite(roomId: string): Promise<CommandResult> {
 
     await rejectRoomInvite(client, roomId);
     await dismissInviteRoom(roomId);
-    process.stdout.write(`Rejected DM invite from ${invite.inviterUserId}.\n`);
+    process.stdout.write(
+      `Rejected DM invite from ${invite.inviterUserId ?? "unknown inviter"}.\n`,
+    );
 
     return { type: "home" } as const;
   });
@@ -1410,6 +1419,20 @@ try {
 } catch (error) {
   process.stderr.write(`${formatError(error)}\n`);
   process.exit(1);
+}
+
+function resolveOtherUserId(room: Room, currentUserId: string | null): string | null {
+  const guessedUserId = room.guessDMUserId();
+
+  if (
+    typeof guessedUserId === "string" &&
+    guessedUserId.length > 0 &&
+    guessedUserId !== currentUserId
+  ) {
+    return guessedUserId;
+  }
+
+  return null;
 }
 
 function formatError(error: unknown): string {

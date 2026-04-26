@@ -23,6 +23,10 @@ export interface PendingDirectRoomInvite extends JoinedRoom {
   inviterUserId: string;
 }
 
+export interface PendingDirectRoomInviteTarget extends JoinedRoom {
+  inviterUserId: string | null;
+}
+
 export interface JoinedRoomOptions {
   excludeRoomIds?: ReadonlySet<string>;
 }
@@ -307,6 +311,38 @@ export function getPendingDirectRoomInvites(
     .sort(compareRooms);
 }
 
+export function getPendingDirectRoomInviteTarget(
+  client: MatrixClient,
+  roomId: string,
+  options: JoinedRoomOptions = {},
+): PendingDirectRoomInviteTarget | null {
+  const room = client.getRoom(roomId);
+
+  if (
+    !room ||
+    room.getMyMembership() !== "invite" ||
+    isSpaceRoom(room) ||
+    options.excludeRoomIds?.has(room.roomId)
+  ) {
+    return null;
+  }
+
+  const strictInvite = pendingDirectInviteSummary(room);
+
+  if (strictInvite) {
+    return strictInvite;
+  }
+
+  const inviterUserId = resolveDirectInviteInviterRelaxed(room);
+  const summary = roomSummary(room);
+
+  return {
+    ...summary,
+    name: inviterUserId ? resolveDirectRoomName(room, [inviterUserId]) : summary.name,
+    inviterUserId,
+  };
+}
+
 export function isSpaceRoom(room: Room): boolean {
   const createEvent = room.currentState.getStateEvents(EventType.RoomCreate, "");
   const content = createEvent?.getContent<Record<string, unknown>>() ?? {};
@@ -375,6 +411,28 @@ function resolveDirectInviteInviter(room: Room): string | null {
 
   if (!isLikelyOneToOneInvite(room)) {
     return null;
+  }
+
+  const inviteEvent = room.currentState.getStateEvents(
+    EventType.RoomMember,
+    room.myUserId,
+  );
+  const inviteSender = inviteEvent?.getSender();
+
+  if (isOtherUserId(inviteSender, room)) {
+    return inviteSender;
+  }
+
+  const guessedUserId = room.guessDMUserId();
+
+  return isOtherUserId(guessedUserId, room) ? guessedUserId : null;
+}
+
+function resolveDirectInviteInviterRelaxed(room: Room): string | null {
+  const dmInviter = room.getDMInviter();
+
+  if (isOtherUserId(dmInviter, room)) {
+    return dmInviter;
   }
 
   const inviteEvent = room.currentState.getStateEvents(
