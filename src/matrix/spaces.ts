@@ -47,3 +47,29 @@ export async function getSpaceChildRoomIds(
 
   return { roomIds, warnings: [] };
 }
+
+export function getJoinedSpaceRooms(client: MatrixClient, spaceId: string): JoinedRoom[] {
+  const space = client.getRoom(spaceId);
+
+  if (!space || !isJoinedRoom(space) || !isSpaceRoom(space)) {
+    throw new Error(`Space ${spaceId} is not joined by the current Matrix session.`);
+  }
+
+  const roomIds = new Set<string>();
+
+  for (const event of space.currentState.getStateEvents(EventType.SpaceChild)) {
+    const roomId = event.getStateKey();
+
+    if (roomId) {
+      roomIds.add(roomId);
+    }
+  }
+
+  return Array.from(roomIds)
+    .map((roomId) => client.getRoom(roomId))
+    .filter((room) => room !== null)
+    .filter((room) => isJoinedRoom(room))
+    .filter((room) => !isSpaceRoom(room))
+    .map((room) => roomSummary(room))
+    .sort(compareRooms);
+}

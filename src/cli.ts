@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { MsgType } from "matrix-js-sdk";
+import { MsgType, type MatrixClient } from "matrix-js-sdk";
 
 import {
   addDirectRoomAccountData,
@@ -13,6 +13,8 @@ import {
   createSpace,
   getJoinedRooms,
   getJoinedDirectRooms,
+  getJoinedSpaceRooms,
+  getRoomDisplayName,
   getPendingDirectRoomInvites,
   getJoinedSpaces,
   getSpaceChildRoomIds,
@@ -21,12 +23,20 @@ import {
   withMatrixClient,
   type LoginAction,
 } from "./matrix/index.js";
+import {
+  CmuxClient,
+  WorkspaceController,
+  getRequiredCmuxContext,
+  launchWorkspace,
+} from "./cmux/index.js";
 import { clearSession, loadSession, saveSession } from "./store/index.js";
 import {
   openChatView,
   promptRequired,
+  runSpaceRoomPicker,
   selectHomeAction,
   selectJoinedRoom,
+  selectWorkspaceAction,
   type HomeAction,
 } from "./ui/index.js";
 
@@ -54,14 +64,16 @@ Commands:
                     Create a private Matrix room, optionally linked to a Space.
   create-dm [userId]
                     Create a direct room and invite a Matrix user.
+  workspace [spaceId]
+                    Open a joined Matrix Space and choose one of its rooms.
+  workspace-controller <spaceId>
+                    Run the cmux room picker for a Matrix Space.
   open [roomId]     Open a joined Matrix room, or pick one when omitted.
   room <roomId>     Open a joined Matrix room chat view.
   send <roomId> <message...>
                     Send one text message and exit.
 
 Planned:
-  workspace
-  workspace-controller
   thread
 `;
 
@@ -126,6 +138,14 @@ async function run(argv: string[]): Promise<CommandResult> {
 
   if (command === "create-dm") {
     return handleCreateDmCommand(args.slice(1));
+  }
+
+  if (command === "workspace") {
+    return handleWorkspaceCommand(args.slice(1));
+  }
+
+  if (command === "workspace-controller") {
+    return handleWorkspaceControllerCommand(args.slice(1));
   }
 
   if (command === "open") {
@@ -229,9 +249,7 @@ async function handleHomeAction(action: HomeAction): Promise<CommandResult> {
   }
 
   if (action.type === "open-workspace") {
-    return plannedAction(
-      `Workspace opening is planned in the next phase. Selected Space: ${action.spaceId}\n`,
-    );
+    return handleOpenWorkspace(action.spaceId);
   }
 
   if (action.type === "open-dm") {
@@ -260,14 +278,6 @@ async function handleHomeAction(action: HomeAction): Promise<CommandResult> {
     exitCode: 0,
     output: "",
     stream: "stdout",
-  };
-}
-
-function plannedAction(output: string): CommandResult {
-  return {
-    exitCode: 1,
-    output,
-    stream: "stderr",
   };
 }
 
@@ -304,6 +314,82 @@ async function handleCreateRoomCommand(args: string[]): Promise<CommandResult> {
 async function handleCreateDmCommand(args: string[]): Promise<CommandResult> {
   const userId = args[0] ?? (await promptRequired("Matrix user ID"));
   return handleCreateDm(userId);
+}
+
+async function handleWorkspaceCommand(args: string[]): Promise<CommandResult> {
+  if (args.length > 1) {
+    return {
+      exitCode: 1,
+      output: "Usage: nugget workspace [spaceId]\n",
+      stream: "stderr",
+    };
+  }
+
+  const requestedSpaceId = args[0];
+
+  if (requestedSpaceId) {
+    return handleOpenWorkspace(requestedSpaceId);
+  }
+
+  return withMatrixClient(async (client) => {
+    const action = await selectWorkspaceAction(await getJoinedSpaces(client));
+
+    if (action.type !== "open-workspace") {
+      return {
+        exitCode: 0,
+        output: "",
+        stream: "stdout",
+      };
+    }
+
+    const workspace = resolveJoinedSpace(client, action.spaceId);
+    await launchWorkspace(workspace);
+
+    return {
+      exitCode: 0,
+      output: "",
+      stream: "stdout",
+    };
+  });
+}
+
+async function handleWorkspaceControllerCommand(args: string[]): Promise<CommandResult> {
+  const spaceId = args[0];
+
+  if (!spaceId || args.length > 1) {
+    return {
+      exitCode: 1,
+      output: "Usage: nugget workspace-controller <spaceId>\n",
+      stream: "stderr",
+    };
+  }
+
+  const context = getRequiredCmuxContext();
+  const cmux = new CmuxClient();
+  const controller = new WorkspaceController(
+    cmux,
+    context.workspaceRef,
+    context.surfaceRef,
+  );
+
+  return withMatrixClient(async (client) => {
+    const space = resolveJoinedSpace(client, spaceId);
+
+    await controller.hydrateOpenRooms(
+      getJoinedSpaceRooms(client, spaceId).map((room) => room.roomId),
+    );
+    await runSpaceRoomPicker({
+      loadRooms: () => getJoinedSpaceRooms(client, spaceId),
+      onOpenRoom: (roomId) => controller.openRoom(roomId),
+      title: `Workspace: ${space.name}`,
+    });
+
+    return {
+      exitCode: 0,
+      output: "",
+      stream: "stdout",
+    };
+  });
 }
 
 async function handleOpenCommand(args: string[]): Promise<CommandResult> {
@@ -395,6 +481,37 @@ async function handleOpenRoom(roomId: string): Promise<CommandResult> {
   });
 }
 
+async function handleOpenWorkspace(spaceId: string): Promise<CommandResult> {
+  return withMatrixClient(async (client) => {
+    const workspace = resolveJoinedSpace(client, spaceId);
+    await launchWorkspace(workspace);
+
+    return {
+      exitCode: 0,
+      output: "",
+      stream: "stdout",
+    };
+  });
+}
+
+function resolveJoinedSpace(
+  client: MatrixClient,
+  spaceId: string,
+): { roomId: string; name: string } {
+  const space = client.getRoom(spaceId);
+
+  if (!space) {
+    throw new Error(`Space ${spaceId} is not visible in the synced client store.`);
+  }
+
+  getJoinedSpaceRooms(client, spaceId);
+
+  return {
+    name: getRoomDisplayName(space),
+    roomId: space.roomId,
+  };
+}
+
 async function handleCreateWorkspace(name: string): Promise<CommandResult> {
   const created = await withMatrixClient(async (client) => createSpace(client, name));
 
@@ -431,16 +548,16 @@ async function handleCreateMatrixRoom(
 }
 
 async function handleCreateDm(userId: string): Promise<CommandResult> {
-  const created = await withMatrixClient(async (client) => createDirectRoom(client, userId));
+  return withMatrixClient(async (client) => {
+    const created = await createDirectRoom(client, userId);
+    await openChatView(client, created.roomId);
 
-  return {
-    exitCode: 0,
-    output:
-      `Created DM with: ${created.name}\n` +
-      `Room ID: ${created.roomId}\n\n` +
-      "DM chat opening is planned in the chat phase.\n",
-    stream: "stdout",
-  };
+    return {
+      exitCode: 0,
+      output: "",
+      stream: "stdout",
+    };
+  });
 }
 
 async function handleAcceptDmInvite(roomId: string): Promise<CommandResult> {

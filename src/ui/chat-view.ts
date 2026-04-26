@@ -125,7 +125,7 @@ async function runInteractiveChat(client: MatrixClient, room: Room): Promise<voi
 
   emitKeypressEvents(process.stdin);
   process.stdin.setRawMode(true);
-  process.stdout.write("\x1b[?25l\x1b[?1000h\x1b[?1006h");
+  process.stdout.write("\x1b[?25l\x1b[?1000l\x1b[?1006l");
 
   await new Promise<void>((resolve) => {
     const finish = (): void => {
@@ -373,8 +373,12 @@ async function runInteractiveChat(client: MatrixClient, room: Room): Promise<voi
       }
 
       if (!key.ctrl && text && !isControlText(text)) {
-        inputBuffer += normalizeInputText(text);
-        render();
+        const inputText = normalizeInputText(stripMouseInputText(text));
+
+        if (inputText.length > 0) {
+          inputBuffer += inputText;
+          render();
+        }
       }
     };
 
@@ -658,6 +662,10 @@ function normalizeInputText(value: string): string {
 
 function isControlText(value: string): boolean {
   return /^[\x00-\x1f\x7f]+$/.test(value);
+}
+
+function stripMouseInputText(value: string): string {
+  return value.replace(/(?:\x1b?\[?<?)?\d+;\d+;\d+[mM]/g, "");
 }
 
 function wrapDisplayText(value: string, width: number): string[] {
