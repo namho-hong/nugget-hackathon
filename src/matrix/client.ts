@@ -35,7 +35,7 @@ export function createMatrixClient(session: MatrixSession): MatrixClient {
 
 export async function startAndSyncClient(
   client: MatrixClient,
-  timeoutMs = 30_000,
+  timeoutMs = 120_000,
 ): Promise<void> {
   const currentState = client.getSyncState();
 
@@ -44,9 +44,19 @@ export async function startAndSyncClient(
   }
 
   await new Promise<void>((resolve, reject) => {
+    let lastState = currentState ?? "none";
+    let lastError: Error | undefined;
     const timeout = setTimeout(() => {
       cleanup();
-      reject(new Error("Timed out waiting for Matrix sync to be ready."));
+      reject(
+        new Error(
+          `Timed out waiting for Matrix sync to be ready after ${Math.round(
+            timeoutMs / 1000,
+          )}s. Last sync state: ${lastState}${
+            lastError ? ` (${lastError.message})` : ""
+          }.`,
+        ),
+      );
     }, timeoutMs);
 
     timeout.unref();
@@ -56,7 +66,14 @@ export async function startAndSyncClient(
       client.off(ClientEvent.Sync, onSync);
     };
 
-    const onSync = (state: SyncState, _previousState: SyncState | null, data?: { error?: Error }): void => {
+    const onSync = (
+      state: SyncState,
+      _previousState: SyncState | null,
+      data?: { error?: Error },
+    ): void => {
+      lastState = state;
+      lastError = data?.error;
+
       if (state === SyncState.Prepared || state === SyncState.Syncing) {
         cleanup();
         resolve();
@@ -71,7 +88,7 @@ export async function startAndSyncClient(
 
     client.on(ClientEvent.Sync, onSync);
 
-    client.startClient({ initialSyncLimit: 20 }).catch((error: unknown) => {
+    client.startClient({ initialSyncLimit: 1, pollTimeout: 10_000 }).catch((error: unknown) => {
       cleanup();
       reject(error);
     });

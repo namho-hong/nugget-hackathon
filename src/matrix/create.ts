@@ -83,7 +83,7 @@ export async function createDirectRoom(
   const targetUserId = validateUserId(userId);
   const existingRoom = findJoinedDirectRoomForUser(client, targetUserId);
 
-  if (existingRoom) {
+  if (existingRoom && (await isJoinedOnServer(client, existingRoom.roomId))) {
     return { name: existingRoom.name, roomId: existingRoom.roomId };
   }
 
@@ -176,13 +176,24 @@ export async function addDirectRoomAccountData(
     );
   }
 
-  const existingRoomIds = nextContent[userId] ?? [];
-
-  nextContent[userId] = existingRoomIds.includes(roomId)
-    ? existingRoomIds
-    : [...existingRoomIds, roomId];
+  nextContent[userId] = [roomId];
 
   await client.setAccountData(EventType.Direct, nextContent);
+}
+
+async function isJoinedOnServer(client: MatrixClient, roomId: string): Promise<boolean> {
+  const userId = client.getUserId();
+
+  if (!userId) {
+    return false;
+  }
+
+  try {
+    const content = await client.getStateEvent(roomId, EventType.RoomMember, userId);
+    return content.membership === "join";
+  } catch {
+    return false;
+  }
 }
 
 async function waitForRoom(
