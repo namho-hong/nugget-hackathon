@@ -1344,3 +1344,53 @@ Verification passed:
 
 Manual live Matrix/cmux verification still requires a Matrix account and a
 running cmux workspace.
+
+# Home And Workspace UI Polish
+
+Goal: Home and workspace-level terminal screens should feel more structured and
+less empty while remaining readable in narrow terminals.
+
+Definition of Done:
+
+- [x] Home menu has a stronger header, section framing, visible selection state,
+  and concise empty states.
+- [x] Workspace room picker uses the same visual language for rooms, status, and
+  actions.
+- [x] General room picker remains consistent with the updated picker style.
+- [x] Narrow terminal widths still truncate labels cleanly.
+- [x] `pnpm build` passes.
+- [x] Working diff is reviewed for unrelated edits.
+
+Checklist:
+
+- [x] Inspect existing home, workspace, room picker, and terminal formatting code.
+- [x] Add scoped terminal picker formatting helpers.
+- [x] Update home menu rendering.
+- [x] Update workspace and room picker rendering.
+- [x] Run verification commands.
+- [x] Review working diff.
+
+Verification Commands:
+
+```sh
+pnpm build
+pnpm test
+git diff --check
+```
+
+Current status:
+
+Implementation is complete at local verification level. Added shared picker
+rendering helpers and applied them to Home, workspace room picker, and the
+general room picker. The updated screens now have a stronger header, compact
+section labels, bracketed tags, inverse selected rows, summary lines, and
+consistent footer hints while preserving narrow-terminal truncation.
+
+Verification passed:
+
+- `pnpm build`
+- `pnpm test`
+- `git diff --check`
+
+Manual live visual verification still requires opening Nugget against a Matrix
+session.

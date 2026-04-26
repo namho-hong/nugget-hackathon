@@ -3,6 +3,13 @@ import type { ReadStream, WriteStream } from "node:tty";
 
 import type { SpaceRoom } from "../matrix/index.js";
 import { truncateDisplayText } from "../util/terminal.js";
+import {
+  renderPickerFooter,
+  renderPickerHeader,
+  renderPickerLine,
+  renderPickerNotice,
+  renderPickerSectionTitle,
+} from "./picker-rendering.js";
 import { promptRequiredNavigation } from "./prompts.js";
 
 interface SpaceRoomPickerIo {
@@ -24,15 +31,22 @@ export type SpaceRoomPickerResult = { type: "home" } | { type: "quit" };
 interface PickerOption {
   label: string;
   action: PickerAction;
+  tag?: string;
   disabled?: false;
 }
 
 interface DisabledPickerOption {
   label: string;
+  tag?: string;
   disabled: true;
 }
 
 type AnyPickerOption = PickerOption | DisabledPickerOption;
+
+interface PickerSection {
+  title: string;
+  options: AnyPickerOption[];
+}
 
 export async function runSpaceRoomPicker(options: {
   title: string;
@@ -50,7 +64,16 @@ export async function runSpaceRoomPicker(options: {
   if (!io.input.isTTY || !io.output.isTTY) {
     const rooms = await options.loadRooms();
     io.output.write(
-      renderPicker(options.title, rooms, -1, io.output.columns ?? 80, "", canInviteUser),
+      renderPicker(
+        options.title,
+        rooms,
+        -1,
+        io.output.columns ?? 80,
+        "",
+        canInviteUser,
+        new Set(),
+        false,
+      ),
     );
     return { type: "quit" };
   }
@@ -84,6 +107,7 @@ export async function runSpaceRoomPicker(options: {
         notice,
         canInviteUser,
         activeRoomIds,
+        true,
       )}`,
     );
   };
@@ -309,28 +333,50 @@ function renderPicker(
   notice = "",
   canInviteUser = false,
   activeRoomIds: ReadonlySet<string> = new Set(),
+  useAnsi = false,
 ): string {
   const width = Math.max(20, columns);
-  const lines = [title, ""];
-  const options = pickerOptions(rooms, canInviteUser);
+  const renderWidth = Math.max(20, Math.min(width, 96));
+  const lines = [...renderPickerHeader(title, roomSummary(rooms), renderWidth, useAnsi), ""];
+  const sections = pickerSections(rooms, canInviteUser);
   let optionIndex = 0;
 
-  for (const option of options) {
-    const isSelected = !option.disabled && optionIndex === selectedIndex;
-    const prefix = option.disabled ? "  " : isSelected ? "> " : "  ";
+  for (const section of sections) {
+    lines.push(renderPickerSectionTitle(section.title, renderWidth, useAnsi));
 
-    if (!option.disabled) {
-      optionIndex += 1;
+    for (const option of section.options) {
+      const isSelected = !option.disabled && optionIndex === selectedIndex;
+
+      if (!option.disabled) {
+        optionIndex += 1;
+      }
+
+      lines.push(
+        renderPickerLine({
+          label: truncate(optionLabel(option), Math.max(10, renderWidth - 4)),
+          selected: isSelected,
+          disabled: option.disabled,
+          tag: optionTag(option, activeRoomIds),
+          width: renderWidth,
+          useAnsi,
+        }),
+      );
     }
 
-    lines.push(`${prefix}${truncate(optionLabel(option, activeRoomIds), width - 4)}`);
+    lines.push("");
   }
 
   if (notice.length > 0) {
-    lines.push("", truncate(notice, width));
+    lines.push(renderPickerNotice(truncate(notice, renderWidth), renderWidth, useAnsi), "");
   }
 
-  lines.push("", "Enter selects, r refreshes, q quits.");
+  lines.push(
+    renderPickerFooter(
+      "Up/Down or j/k move  Enter selects  r refreshes  q quits",
+      renderWidth,
+      useAnsi,
+    ),
+  );
   return `${lines.join("\n")}\n`;
 }
 
@@ -347,74 +393,99 @@ function pickerOptions(
   rooms: readonly SpaceRoom[],
   canInviteUser: boolean,
 ): AnyPickerOption[] {
+  return pickerSections(rooms, canInviteUser).flatMap((section) => section.options);
+}
+
+function pickerSections(
+  rooms: readonly SpaceRoom[],
+  canInviteUser: boolean,
+): PickerSection[] {
   const roomOptions: AnyPickerOption[] =
     rooms.length === 0
-      ? [{ label: "No rooms in this workspace", disabled: true }]
+      ? [{ label: "No rooms in this workspace", tag: "empty", disabled: true }]
       : rooms.map((room) => roomOption(room));
+  const actionOptions: PickerOption[] = [
+    ...(canInviteUser
+      ? [{ label: "Invite user", tag: "invite", action: { type: "invite-user" } } satisfies PickerOption]
+      : []),
+    { label: "Refresh rooms", tag: "sync", action: { type: "refresh" } },
+    { label: "Home", tag: "home", action: { type: "home" } },
+    { label: "Quit", tag: "quit", action: { type: "quit" } },
+  ];
 
   return [
-    ...roomOptions,
-    ...(canInviteUser
-      ? [{ label: "Invite user", action: { type: "invite-user" } } satisfies PickerOption]
-      : []),
-    { label: "Refresh", action: { type: "refresh" } },
-    { label: "Home", action: { type: "home" } },
-    { label: "Quit", action: { type: "quit" } },
+    { title: "Rooms", options: roomOptions },
+    { title: "Actions", options: actionOptions },
   ];
 }
 
-function optionLabel(option: AnyPickerOption, activeRoomIds: ReadonlySet<string>): string {
-  if (option.disabled || option.action.type !== "open-room") {
-    return option.label;
+function optionLabel(option: AnyPickerOption): string {
+  return option.label;
+}
+
+function optionTag(option: AnyPickerOption, activeRoomIds: ReadonlySet<string>): string | undefined {
+  if (
+    !option.disabled &&
+    option.action.type === "open-room" &&
+    activeRoomIds.has(option.action.roomId)
+  ) {
+    return "new";
   }
 
-  return activeRoomIds.has(option.action.roomId) ? `* ${option.label}` : option.label;
+  return option.tag;
 }
 
 function roomOption(room: SpaceRoom): AnyPickerOption {
-  const label = `${room.name}  ${statusLabel(room)}`;
-
   if (room.status === "joined") {
     return {
-      label,
+      label: room.name,
+      tag: "joined",
       action: { type: "open-room", roomId: room.roomId },
     };
   }
 
   if (room.status === "invited") {
     return {
-      label,
+      label: room.name,
+      tag: "invite",
       action: { type: "accept-room-invite", roomId: room.roomId },
     };
   }
 
   if (room.status === "joinable") {
     return {
-      label,
+      label: room.name,
+      tag: "join",
       action: { type: "join-room", roomId: room.roomId },
     };
   }
 
   return {
-    label,
+    label: room.name,
+    tag: "locked",
     disabled: true,
   };
 }
 
-function statusLabel(room: SpaceRoom): string {
-  if (room.status === "joined") {
-    return "Joined";
+function roomSummary(rooms: readonly SpaceRoom[]): string {
+  if (rooms.length === 0) {
+    return "No visible rooms";
   }
 
-  if (room.status === "invited") {
-    return "Invite pending";
+  const joined = rooms.filter((room) => room.status === "joined").length;
+  const pending = rooms.filter((room) => room.status === "invited").length;
+  const joinable = rooms.filter((room) => room.status === "joinable").length;
+  const parts = [`${rooms.length} room${rooms.length === 1 ? "" : "s"}`, `${joined} joined`];
+
+  if (pending > 0) {
+    parts.push(`${pending} invite${pending === 1 ? "" : "s"}`);
   }
 
-  if (room.status === "joinable") {
-    return "Join";
+  if (joinable > 0) {
+    parts.push(`${joinable} joinable`);
   }
 
-  return "No access";
+  return parts.join("  |  ");
 }
 
 function pruneActivity(activeRoomIds: Set<string>, rooms: readonly SpaceRoom[]): void {

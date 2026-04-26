@@ -3,6 +3,12 @@ import type { ReadStream, WriteStream } from "node:tty";
 
 import type { JoinedRoom } from "../matrix/index.js";
 import { truncateDisplayText } from "../util/terminal.js";
+import {
+  renderPickerFooter,
+  renderPickerHeader,
+  renderPickerLine,
+  renderPickerSectionTitle,
+} from "./picker-rendering.js";
 
 interface RoomPickerIo {
   input: ReadStream;
@@ -16,6 +22,7 @@ export type JoinedRoomSelection =
 
 interface PickerOption {
   label: string;
+  tag: string;
   selection: JoinedRoomSelection;
 }
 
@@ -29,7 +36,7 @@ export async function selectJoinedRoom(
   }
 
   if (!io.input.isTTY || !io.output.isTTY) {
-    io.output.write(renderRoomPicker(rooms, -1, io.output.columns ?? 80));
+    io.output.write(renderRoomPicker(rooms, -1, io.output.columns ?? 80, false));
     return { type: "quit" };
   }
 
@@ -51,7 +58,12 @@ export async function selectJoinedRoom(
         }
 
         io.output.write(
-          `\x1b[2J\x1b[H${renderRoomPicker(rooms, selectedIndex, io.output.columns ?? 80)}`,
+          `\x1b[2J\x1b[H${renderRoomPicker(
+            rooms,
+            selectedIndex,
+            io.output.columns ?? 80,
+            true,
+          )}`,
         );
       };
 
@@ -126,16 +138,26 @@ function renderRoomPicker(
   rooms: readonly JoinedRoom[],
   selectedIndex: number,
   columns: number,
+  useAnsi: boolean,
 ): string {
-  const width = Math.max(20, columns);
-  const lines = ["Open Room", ""];
+  const width = Math.max(20, Math.min(columns, 96));
+  const subtitle = `${rooms.length} joined room${rooms.length === 1 ? "" : "s"}`;
+  const lines = [...renderPickerHeader("Open Room", subtitle, width, useAnsi), ""];
 
+  lines.push(renderPickerSectionTitle("Rooms", width, useAnsi));
   pickerOptions(rooms).forEach((option, index) => {
-    const prefix = index === selectedIndex ? "> " : "  ";
-    lines.push(`${prefix}${truncate(option.label, width - 4)}`);
+    lines.push(
+      renderPickerLine({
+        label: truncate(option.label, Math.max(10, width - 4)),
+        selected: index === selectedIndex,
+        tag: option.tag,
+        width,
+        useAnsi,
+      }),
+    );
   });
 
-  lines.push("", "Enter selects, Esc quits.");
+  lines.push("", renderPickerFooter("Up/Down or j/k move  Enter selects  q quits", width, useAnsi));
   return `${lines.join("\n")}\n`;
 }
 
@@ -143,10 +165,11 @@ function pickerOptions(rooms: readonly JoinedRoom[]): PickerOption[] {
   return [
     ...rooms.map((room) => ({
       label: `${room.name}  ${room.roomId}`,
+      tag: "room",
       selection: { type: "open-room", roomId: room.roomId } satisfies JoinedRoomSelection,
     })),
-    { label: "Home", selection: { type: "home" } },
-    { label: "Quit", selection: { type: "quit" } },
+    { label: "Home", tag: "home", selection: { type: "home" } },
+    { label: "Quit", tag: "quit", selection: { type: "quit" } },
   ];
 }
 

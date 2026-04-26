@@ -2,6 +2,12 @@ import { emitKeypressEvents } from "node:readline";
 import type { ReadStream, WriteStream } from "node:tty";
 
 import { truncateDisplayText } from "../util/terminal.js";
+import {
+  renderPickerFooter,
+  renderPickerHeader,
+  renderPickerLine,
+  renderPickerSectionTitle,
+} from "./picker-rendering.js";
 
 export interface HomeWorkspace {
   roomId: string;
@@ -64,11 +70,13 @@ interface PickerIo {
 interface PickerOption {
   label: string;
   action: HomeAction;
+  tag?: string;
   disabled?: false;
 }
 
 interface DisabledPickerOption {
   label: string;
+  tag?: string;
   disabled: true;
 }
 
@@ -84,8 +92,7 @@ export async function selectHomeAction(
   io: PickerIo = { input: process.stdin, output: process.stdout },
 ): Promise<HomeAction> {
   const sections = homeSections(home);
-  const title = home.accountUserId ? `Nugget (${home.accountUserId})` : "Nugget";
-  const action = await selectAction(title, sections, io);
+  const action = await selectAction("Nugget", sections, io, homeSubtitle(home));
 
   if (action.type === "review-dm-invite") {
     const invite = home.pendingDirectInvites?.find((item) => item.roomId === action.roomId);
@@ -134,6 +141,7 @@ export async function selectWorkspaceAction(
       ? [{ label: "No workspaces", disabled: true }]
       : sortedWorkspaces.map((workspace) => ({
           label: workspace.name,
+          tag: "space",
           action: { type: "open-workspace", spaceId: workspace.roomId },
         }));
 
@@ -153,6 +161,7 @@ export async function selectWorkspaceAction(
       },
     ],
     io,
+    `${sortedWorkspaces.length} total`,
   );
 }
 
@@ -165,16 +174,19 @@ function homeSections(home: SelectHomeActionInput): PickerSection[] {
       : [
           ...home.workspaces.slice(0, 5).map((workspace) => ({
             label: workspace.name,
+            tag: "space",
             action: { type: "open-workspace", spaceId: workspace.roomId } satisfies HomeAction,
           })),
-          { label: "View all...", action: { type: "view-all-workspaces" } },
+          { label: "View all workspaces", tag: "more", action: { type: "view-all-workspaces" } },
         ];
 
+  const openDirectRoomIds = home.openDirectRoomIds ?? new Set<string>();
   const dmOptions: AnyPickerOption[] =
     home.directMessages.length === 0
-      ? [{ label: "No DMs", disabled: true }]
+      ? [{ label: "No DMs yet", tag: "empty", disabled: true }]
       : home.directMessages.slice(0, 5).map((directMessage) => ({
-          label: directMessageLabel(directMessage, home.openDirectRoomIds ?? new Set()),
+          label: directMessage.name,
+          tag: openDirectRoomIds.has(directMessage.roomId) ? "open" : "dm",
           action: { type: "open-dm", roomId: directMessage.roomId } satisfies HomeAction,
         }));
 
@@ -194,6 +206,7 @@ function homeSections(home: SelectHomeActionInput): PickerSection[] {
       title: "Pending DM Invites",
       options: pendingDirectInvites.slice(0, 5).map((invite) => ({
         label: `${invite.name} from ${invite.inviterUserId}`,
+        tag: "invite",
         action: { type: "review-dm-invite", roomId: invite.roomId } satisfies HomeAction,
       })),
     });
@@ -204,6 +217,7 @@ function homeSections(home: SelectHomeActionInput): PickerSection[] {
       title: "Pending Workspace Invites",
       options: pendingWorkspaceInvites.slice(0, 5).map((invite) => ({
         label: `${invite.name} from ${invite.inviterUserId}`,
+        tag: "invite",
         action: {
           type: "review-workspace-invite",
           spaceId: invite.roomId,
@@ -215,10 +229,10 @@ function homeSections(home: SelectHomeActionInput): PickerSection[] {
   sections.push({
     title: "Actions",
     options: [
-      { label: "+ New workspace", action: { type: "create-workspace" } },
-      { label: "+ New DM", action: { type: "create-dm" } },
-      { label: "Logout", action: { type: "logout" } },
-      { label: "Quit", action: { type: "quit" } },
+      { label: "New workspace", tag: "new", action: { type: "create-workspace" } },
+      { label: "New DM", tag: "new", action: { type: "create-dm" } },
+      { label: "Logout", tag: "acct", action: { type: "logout" } },
+      { label: "Quit", tag: "quit", action: { type: "quit" } },
     ],
   });
 
@@ -227,6 +241,7 @@ function homeSections(home: SelectHomeActionInput): PickerSection[] {
       title: "Warnings",
       options: home.warnings.slice(0, 3).map((warning) => ({
         label: warning,
+        tag: "warn",
         disabled: true,
       })),
     });
@@ -235,13 +250,21 @@ function homeSections(home: SelectHomeActionInput): PickerSection[] {
   return sections;
 }
 
-function directMessageLabel(
-  directMessage: HomeDirectMessage,
-  openDirectRoomIds: ReadonlySet<string>,
-): string {
-  return openDirectRoomIds.has(directMessage.roomId)
-    ? `* ${directMessage.name}`
-    : directMessage.name;
+function homeSubtitle(home: SelectHomeActionInput): string {
+  const counts = [
+    `${home.workspaces.length} workspace${home.workspaces.length === 1 ? "" : "s"}`,
+    `${home.directMessages.length} DM${home.directMessages.length === 1 ? "" : "s"}`,
+  ];
+  const pendingCount =
+    (home.pendingDirectInvites?.length ?? 0) + (home.pendingWorkspaceInvites?.length ?? 0);
+
+  if (pendingCount > 0) {
+    counts.push(`${pendingCount} invite${pendingCount === 1 ? "" : "s"}`);
+  }
+
+  return home.accountUserId
+    ? `${home.accountUserId}  |  ${counts.join("  |  ")}`
+    : counts.join("  |  ");
 }
 
 function selectPendingDirectInviteAction(
@@ -254,8 +277,8 @@ function selectPendingDirectInviteAction(
       {
         title: "Invite",
         options: [
-          { label: `From ${invite.inviterUserId}`, disabled: true },
-          { label: invite.roomId, disabled: true },
+          { label: `From ${invite.inviterUserId}`, tag: "from", disabled: true },
+          { label: invite.roomId, tag: "room", disabled: true },
         ],
       },
       {
@@ -263,18 +286,21 @@ function selectPendingDirectInviteAction(
         options: [
           {
             label: "Accept",
+            tag: "yes",
             action: { type: "accept-dm-invite", roomId: invite.roomId },
           },
           {
             label: "Reject",
+            tag: "no",
             action: { type: "reject-dm-invite", roomId: invite.roomId },
           },
-          { label: "Home", action: { type: "home" } },
-          { label: "Quit", action: { type: "quit" } },
+          { label: "Home", tag: "home", action: { type: "home" } },
+          { label: "Quit", tag: "quit", action: { type: "quit" } },
         ],
       },
     ],
     io,
+    invite.roomId,
   );
 }
 
@@ -288,8 +314,8 @@ function selectPendingWorkspaceInviteAction(
       {
         title: "Invite",
         options: [
-          { label: `From ${invite.inviterUserId}`, disabled: true },
-          { label: invite.roomId, disabled: true },
+          { label: `From ${invite.inviterUserId}`, tag: "from", disabled: true },
+          { label: invite.roomId, tag: "space", disabled: true },
         ],
       },
       {
@@ -297,18 +323,21 @@ function selectPendingWorkspaceInviteAction(
         options: [
           {
             label: "Accept",
+            tag: "yes",
             action: { type: "accept-workspace-invite", spaceId: invite.roomId },
           },
           {
             label: "Reject",
+            tag: "no",
             action: { type: "reject-workspace-invite", spaceId: invite.roomId },
           },
-          { label: "Home", action: { type: "home" } },
-          { label: "Quit", action: { type: "quit" } },
+          { label: "Home", tag: "home", action: { type: "home" } },
+          { label: "Quit", tag: "quit", action: { type: "quit" } },
         ],
       },
     ],
     io,
+    invite.roomId,
   );
 }
 
@@ -316,13 +345,14 @@ async function selectAction(
   title: string,
   sections: PickerSection[],
   io: PickerIo,
+  subtitle = "",
 ): Promise<HomeAction> {
   const selectableOptions = sections
     .flatMap((section) => section.options)
     .filter((option): option is PickerOption => !option.disabled);
 
   if (!io.input.isTTY || !io.output.isTTY) {
-    io.output.write(renderMenu(title, sections, -1, io.output.columns ?? 80));
+    io.output.write(renderMenu(title, subtitle, sections, -1, io.output.columns ?? 80, false));
     return { type: "quit" };
   }
 
@@ -347,7 +377,14 @@ async function selectAction(
         }
 
         io.output.write(
-          `\x1b[2J\x1b[H${renderMenu(title, sections, selectedIndex, io.output.columns ?? 80)}`,
+          `\x1b[2J\x1b[H${renderMenu(
+            title,
+            subtitle,
+            sections,
+            selectedIndex,
+            io.output.columns ?? 80,
+            true,
+          )}`,
         );
       };
 
@@ -375,6 +412,11 @@ async function selectAction(
 
       const onKeypress = (_text: string, key: KeypressEvent): void => {
         if (key.ctrl && key.name === "c") {
+          finish({ type: "quit" });
+          return;
+        }
+
+        if (key.name === "escape" || key.name === "q") {
           finish({ type: "quit" });
           return;
         }
@@ -416,30 +458,42 @@ async function selectAction(
 
 function renderMenu(
   title: string,
+  subtitle: string,
   sections: readonly PickerSection[],
   selectedIndex: number,
   columns: number,
+  useAnsi: boolean,
 ): string {
-  const lines = [title, ""];
+  const width = Math.max(20, Math.min(columns, 96));
+  const lines = [...renderPickerHeader(title, subtitle, width, useAnsi), ""];
   let optionIndex = 0;
 
   for (const section of sections) {
-    lines.push(section.title);
+    lines.push(renderPickerSectionTitle(section.title, width, useAnsi));
 
     for (const option of section.options) {
       const isSelected = !option.disabled && optionIndex === selectedIndex;
-      const prefix = option.disabled ? "  " : isSelected ? "> " : "  ";
 
       if (!option.disabled) {
         optionIndex += 1;
       }
 
-      lines.push(`${prefix}${truncate(option.label, Math.max(10, columns - 4))}`);
+      lines.push(
+        renderPickerLine({
+          label: truncate(option.label, Math.max(10, width - 4)),
+          selected: isSelected,
+          disabled: option.disabled,
+          tag: option.tag,
+          width,
+          useAnsi,
+        }),
+      );
     }
 
     lines.push("");
   }
 
+  lines.push(renderPickerFooter("Up/Down or j/k move  Enter selects  q quits", width, useAnsi));
   return `${lines.join("\n")}\n`;
 }
 
