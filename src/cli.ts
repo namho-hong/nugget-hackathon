@@ -932,13 +932,13 @@ async function getCurrentCmuxContext(): Promise<{
   const cmux = new CmuxClient();
   const tree = await cmux.tree({ all: true, preserveCallerEnv: true });
   const surfaceRef =
-    process.env.CMUX_SURFACE_ID ??
     tree.caller?.surface_ref ??
-    tree.active?.surface_ref;
+    tree.active?.surface_ref ??
+    process.env.CMUX_SURFACE_ID;
   const currentWorkspaceRef =
-    process.env.CMUX_WORKSPACE_ID ??
     tree.caller?.workspace_ref ??
-    tree.active?.workspace_ref;
+    tree.active?.workspace_ref ??
+    process.env.CMUX_WORKSPACE_ID;
 
   if (!surfaceRef || !currentWorkspaceRef) {
     return null;
