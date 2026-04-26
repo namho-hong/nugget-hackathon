@@ -157,7 +157,7 @@ export function deriveVia(roomIdOrUserId: string): string {
   return roomIdOrUserId.slice(separatorIndex + 1);
 }
 
-async function addDirectRoomAccountData(
+export async function addDirectRoomAccountData(
   client: MatrixClient,
   userId: string,
   roomId: string,

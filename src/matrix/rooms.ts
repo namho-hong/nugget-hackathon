@@ -16,6 +16,10 @@ export interface JoinedDirectRoom extends JoinedRoom {
   userIds: string[];
 }
 
+export interface PendingDirectRoomInvite extends JoinedRoom {
+  inviterUserId: string;
+}
+
 export interface JoinedRoomOptions {
   excludeRoomIds?: ReadonlySet<string>;
 }
@@ -61,38 +65,41 @@ export async function getJoinedDirectRooms(
   client: MatrixClient,
   options: JoinedRoomOptions = {},
 ): Promise<JoinedDirectRoom[]> {
-  const directRoomUsers = await getDirectRoomUsers(client);
-  const joinedRoomIds = await getJoinedRoomIds(client);
+  const directRoomUsers = getDirectRoomUsers(client);
+  const rooms = Array.from(directRoomUsers.entries()).map(([roomId, userIds]) => {
+    const room = client.getRoom(roomId);
 
-  const rooms = await Promise.all(
-    Array.from(directRoomUsers.entries()).map(async ([roomId, userIds]) => {
-      const room = client.getRoom(roomId);
+    if (
+      room &&
+      isJoinedRoom(room) &&
+      !isSpaceRoom(room) &&
+      !options.excludeRoomIds?.has(roomId)
+    ) {
+      return directRoomSummary(room, userIds);
+    }
 
-      if (
-        room &&
-        (isJoinedRoom(room) || joinedRoomIds.has(roomId)) &&
-        !isSpaceRoom(room) &&
-        !options.excludeRoomIds?.has(roomId)
-      ) {
-        return directRoomSummary(room, userIds);
-      }
-
-      if (
-        !joinedRoomIds.has(roomId) ||
-        options.excludeRoomIds?.has(roomId)
-      ) {
-        return null;
-      }
-
-      return directRoomSummaryFromState(client, roomId, userIds);
-    }),
-  );
+    return null;
+  });
 
   return rooms.filter((room): room is JoinedDirectRoom => room !== null).sort(compareRooms);
 }
 
 export function isJoinedRoom(room: Room): boolean {
   return room.getMyMembership() === "join";
+}
+
+export function getPendingDirectRoomInvites(
+  client: MatrixClient,
+  options: JoinedRoomOptions = {},
+): PendingDirectRoomInvite[] {
+  return client
+    .getRooms()
+    .filter((room) => room.getMyMembership() === "invite")
+    .filter((room) => !isSpaceRoom(room))
+    .filter((room) => !options.excludeRoomIds?.has(room.roomId))
+    .map((room) => pendingDirectInviteSummary(room))
+    .filter((room): room is PendingDirectRoomInvite => room !== null)
+    .sort(compareRooms);
 }
 
 export function isSpaceRoom(room: Room): boolean {
@@ -138,21 +145,19 @@ function directRoomSummary(room: Room, userIds: string[]): JoinedDirectRoom {
   };
 }
 
-async function directRoomSummaryFromState(
-  client: MatrixClient,
-  roomId: string,
-  userIds: string[],
-): Promise<JoinedDirectRoom | null> {
-  if (await isSpaceRoomFromServer(client, roomId)) {
+function pendingDirectInviteSummary(room: Room): PendingDirectRoomInvite | null {
+  const inviterUserId = room.getDMInviter();
+
+  if (!inviterUserId) {
     return null;
   }
 
-  const name = await getRoomNameFromServer(client, roomId);
+  const summary = roomSummary(room);
 
   return {
-    roomId,
-    name: name ?? userIds[0] ?? roomId,
-    userIds,
+    ...summary,
+    name: resolveDirectRoomName(room, [inviterUserId]),
+    inviterUserId,
   };
 }
 
@@ -182,13 +187,11 @@ function resolveDirectRoomName(room: Room, userIds: string[]): string {
   return userIds[0] ?? room.roomId;
 }
 
-async function getDirectRoomUsers(client: MatrixClient): Promise<Map<string, string[]>> {
+function getDirectRoomUsers(client: MatrixClient): Map<string, string[]> {
   const directEvent = client.getAccountData(EventType.Direct);
   const localContent = directEvent?.getContent<Record<string, unknown>>() ?? {};
-  const serverContent = await getDirectAccountDataFromServer(client);
   const roomUsers = new Map<string, Set<string>>();
 
-  addDirectRoomUsers(roomUsers, serverContent);
   addDirectRoomUsers(roomUsers, localContent);
 
   return new Map(
@@ -217,78 +220,5 @@ function addDirectRoomUsers(
       users.add(userId);
       roomUsers.set(roomId, users);
     }
-  }
-}
-
-async function getDirectAccountDataFromServer(
-  client: MatrixClient,
-): Promise<Record<string, unknown>> {
-  const accessToken = client.getAccessToken();
-  const userId = client.getUserId();
-
-  if (!accessToken || !userId) {
-    return {};
-  }
-
-  const url = new URL(
-    `/_matrix/client/v3/user/${encodeURIComponent(userId)}/account_data/${encodeURIComponent(EventType.Direct)}`,
-    client.getHomeserverUrl(),
-  );
-
-  try {
-    const response = await fetch(url, {
-      headers: {
-        authorization: `Bearer ${accessToken}`,
-      },
-    });
-
-    if (response.status === 404) {
-      return {};
-    }
-
-    if (!response.ok) {
-      return {};
-    }
-
-    const content = (await response.json()) as unknown;
-
-    return isRecord(content) ? content : {};
-  } catch {
-    return {};
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-async function getJoinedRoomIds(client: MatrixClient): Promise<Set<string>> {
-  const response = await client.getJoinedRooms();
-  return new Set(response.joined_rooms);
-}
-
-async function isSpaceRoomFromServer(
-  client: MatrixClient,
-  roomId: string,
-): Promise<boolean> {
-  try {
-    const content = await client.getStateEvent(roomId, EventType.RoomCreate, "");
-    return content[RoomCreateTypeField] === RoomType.Space;
-  } catch {
-    return false;
-  }
-}
-
-async function getRoomNameFromServer(
-  client: MatrixClient,
-  roomId: string,
-): Promise<string | null> {
-  try {
-    const content = await client.getStateEvent(roomId, EventType.RoomName, "");
-    const name = content.name;
-
-    return typeof name === "string" && name.trim().length > 0 ? name.trim() : null;
-  } catch {
-    return null;
   }
 }

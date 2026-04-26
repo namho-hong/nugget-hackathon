@@ -14,18 +14,30 @@ export interface HomeDirectMessage {
   lastActivityTs?: number;
 }
 
+export interface HomePendingDirectInvite {
+  roomId: string;
+  name: string;
+  inviterUserId: string;
+  lastActivityTs?: number;
+}
+
 export type HomeAction =
   | { type: "open-workspace"; spaceId: string }
   | { type: "view-all-workspaces" }
   | { type: "create-workspace" }
   | { type: "open-dm"; roomId: string }
+  | { type: "review-dm-invite"; roomId: string }
+  | { type: "accept-dm-invite"; roomId: string }
+  | { type: "reject-dm-invite"; roomId: string }
   | { type: "create-dm" }
   | { type: "logout" }
   | { type: "quit" };
 
 export interface SelectHomeActionInput {
+  accountUserId?: string;
   workspaces: HomeWorkspace[];
   directMessages: HomeDirectMessage[];
+  pendingDirectInvites?: HomePendingDirectInvite[];
   warnings?: string[];
 }
 
@@ -57,7 +69,18 @@ export async function selectHomeAction(
   io: PickerIo = { input: process.stdin, output: process.stdout },
 ): Promise<HomeAction> {
   const sections = homeSections(home);
-  const action = await selectAction("Nugget", sections, io);
+  const title = home.accountUserId ? `Nugget (${home.accountUserId})` : "Nugget";
+  const action = await selectAction(title, sections, io);
+
+  if (action.type === "review-dm-invite") {
+    const invite = home.pendingDirectInvites?.find((item) => item.roomId === action.roomId);
+
+    if (!invite) {
+      return { type: "quit" };
+    }
+
+    return selectPendingDirectInviteAction(invite, io);
+  }
 
   if (action.type !== "view-all-workspaces") {
     return action;
@@ -104,6 +127,7 @@ export async function selectWorkspaceAction(
 }
 
 function homeSections(home: SelectHomeActionInput): PickerSection[] {
+  const pendingDirectInvites = home.pendingDirectInvites ?? [];
   const workspaceOptions: AnyPickerOption[] =
     home.workspaces.length === 0
       ? [{ label: "No workspaces", disabled: true }]
@@ -132,16 +156,27 @@ function homeSections(home: SelectHomeActionInput): PickerSection[] {
       title: "DMs",
       options: dmOptions,
     },
-    {
-      title: "Actions",
-      options: [
-        { label: "+ New workspace", action: { type: "create-workspace" } },
-        { label: "+ New DM", action: { type: "create-dm" } },
-        { label: "Logout", action: { type: "logout" } },
-        { label: "Quit", action: { type: "quit" } },
-      ],
-    },
   ];
+
+  if (pendingDirectInvites.length > 0) {
+    sections.push({
+      title: "Pending DM Invites",
+      options: pendingDirectInvites.slice(0, 5).map((invite) => ({
+        label: `${invite.name} from ${invite.inviterUserId}`,
+        action: { type: "review-dm-invite", roomId: invite.roomId } satisfies HomeAction,
+      })),
+    });
+  }
+
+  sections.push({
+    title: "Actions",
+    options: [
+      { label: "+ New workspace", action: { type: "create-workspace" } },
+      { label: "+ New DM", action: { type: "create-dm" } },
+      { label: "Logout", action: { type: "logout" } },
+      { label: "Quit", action: { type: "quit" } },
+    ],
+  });
 
   if (home.warnings && home.warnings.length > 0) {
     sections.push({
@@ -154,6 +189,39 @@ function homeSections(home: SelectHomeActionInput): PickerSection[] {
   }
 
   return sections;
+}
+
+function selectPendingDirectInviteAction(
+  invite: HomePendingDirectInvite,
+  io: PickerIo,
+): Promise<HomeAction> {
+  return selectAction(
+    `DM Invite: ${invite.name}`,
+    [
+      {
+        title: "Invite",
+        options: [
+          { label: `From ${invite.inviterUserId}`, disabled: true },
+          { label: invite.roomId, disabled: true },
+        ],
+      },
+      {
+        title: "Actions",
+        options: [
+          {
+            label: "Accept",
+            action: { type: "accept-dm-invite", roomId: invite.roomId },
+          },
+          {
+            label: "Reject",
+            action: { type: "reject-dm-invite", roomId: invite.roomId },
+          },
+          { label: "Cancel", action: { type: "quit" } },
+        ],
+      },
+    ],
+    io,
+  );
 }
 
 async function selectAction(

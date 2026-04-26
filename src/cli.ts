@@ -7,11 +7,13 @@ import { fileURLToPath } from "node:url";
 import { MsgType } from "matrix-js-sdk";
 
 import {
+  addDirectRoomAccountData,
   createDirectRoom,
   createRoom,
   createSpace,
   getJoinedRooms,
   getJoinedDirectRooms,
+  getPendingDirectRoomInvites,
   getJoinedSpaces,
   getSpaceChildRoomIds,
   loginWithSso,
@@ -184,14 +186,19 @@ async function handleDefaultHome(): Promise<CommandResult> {
 }
 
 async function selectHomeActionFromMatrix(): Promise<HomeAction> {
-  return withMatrixClient(async (client) => {
+  return withMatrixClient(async (client, session) => {
     const workspaces = await getJoinedSpaces(client);
     const childRooms = await getSpaceChildRoomIds(client, workspaces);
     const directMessages = await getJoinedDirectRooms(client, {
       excludeRoomIds: childRooms.roomIds,
     });
+    const pendingDirectInvites = getPendingDirectRoomInvites(client, {
+      excludeRoomIds: childRooms.roomIds,
+    });
     return selectHomeAction({
+      accountUserId: session.userId,
       directMessages,
+      pendingDirectInvites,
       warnings: childRooms.warnings,
       workspaces,
     });
@@ -231,13 +238,29 @@ async function handleHomeAction(action: HomeAction): Promise<CommandResult> {
     return handleOpenRoom(action.roomId);
   }
 
+  if (action.type === "accept-dm-invite") {
+    return handleAcceptDmInvite(action.roomId);
+  }
+
+  if (action.type === "reject-dm-invite") {
+    return handleRejectDmInvite(action.roomId);
+  }
+
   if (action.type === "create-workspace") {
     const name = await promptRequired("Workspace name");
     return handleCreateWorkspace(name);
   }
 
-  const userId = await promptRequired("Matrix user ID");
-  return handleCreateDm(userId);
+  if (action.type === "create-dm") {
+    const userId = await promptRequired("Matrix user ID");
+    return handleCreateDm(userId);
+  }
+
+  return {
+    exitCode: 0,
+    output: "",
+    stream: "stdout",
+  };
 }
 
 function plannedAction(output: string): CommandResult {
@@ -418,6 +441,56 @@ async function handleCreateDm(userId: string): Promise<CommandResult> {
       "DM chat opening is planned in the chat phase.\n",
     stream: "stdout",
   };
+}
+
+async function handleAcceptDmInvite(roomId: string): Promise<CommandResult> {
+  return withMatrixClient(async (client) => {
+    const invite = getPendingDirectRoomInvites(client).find((item) => item.roomId === roomId);
+
+    if (!invite) {
+      throw new Error(`DM invite ${roomId} is no longer pending.`);
+    }
+
+    const joinedRoom = await client.joinRoom(roomId);
+    const directUserId = invite.inviterUserId;
+    const currentUserId = client.getUserId();
+
+    if (directUserId !== currentUserId) {
+      try {
+        await addDirectRoomAccountData(client, directUserId, joinedRoom.roomId);
+      } catch (error) {
+        process.stdout.write(
+          `Accepted DM invite, but could not update direct chat metadata: ${formatError(error)}\n`,
+        );
+      }
+    }
+
+    await openChatView(client, joinedRoom.roomId);
+
+    return {
+      exitCode: 0,
+      output: "",
+      stream: "stdout",
+    };
+  });
+}
+
+async function handleRejectDmInvite(roomId: string): Promise<CommandResult> {
+  return withMatrixClient(async (client) => {
+    const invite = getPendingDirectRoomInvites(client).find((item) => item.roomId === roomId);
+
+    if (!invite) {
+      throw new Error(`DM invite ${roomId} is no longer pending.`);
+    }
+
+    await client.leave(roomId);
+
+    return {
+      exitCode: 0,
+      output: `Rejected DM invite from ${invite.inviterUserId}.\n`,
+      stream: "stdout",
+    };
+  });
 }
 
 function parseCreateRoomArgs(args: string[]): { name?: string; spaceId?: string } {
