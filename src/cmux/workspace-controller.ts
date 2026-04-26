@@ -61,12 +61,13 @@ export class WorkspaceController {
     const existing = this.openedRooms.get(roomId);
 
     if (existing) {
-      await this.respawnRoom(roomId, existing.surfaceRef);
-    }
-
-    if (existing && (await this.tryFocus(existing))) {
-      this.lastRoomSurfaceRef = existing.surfaceRef;
-      return;
+      if (
+        (await this.tryRespawnRoom(roomId, existing.surfaceRef)) &&
+        (await this.tryFocus(existing))
+      ) {
+        this.lastRoomSurfaceRef = existing.surfaceRef;
+        return;
+      }
     }
 
     this.openedRooms.delete(roomId);
@@ -129,6 +130,15 @@ export class WorkspaceController {
         surfaceRef: target.surfaceRef,
         workspaceRef: this.workspaceRef,
       });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async tryRespawnRoom(roomId: string, surfaceRef: string): Promise<boolean> {
+    try {
+      await this.respawnRoom(roomId, surfaceRef);
       return true;
     } catch {
       return false;

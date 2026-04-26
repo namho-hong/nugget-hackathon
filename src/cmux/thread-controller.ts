@@ -42,12 +42,9 @@ export async function openThreadBesideCurrentSurface(
   if (existing) {
     const pane = findSurfacePane(beforeWorkspace, existing.ref);
 
-    if (!pane) {
-      throw new Error(`cmux surface ${existing.ref} has no containing pane.`);
+    if (pane && (await tryFocusPaneSurface(cmux, workspaceRef, pane))) {
+      return;
     }
-
-    await focusPaneSurface(cmux, workspaceRef, pane);
-    return;
   }
 
   const beforeSurfaceRefs = new Set(
@@ -91,7 +88,10 @@ export async function openThreadBesideCurrentSurface(
     surfaceRef: newSurface.ref,
     workspaceRef,
   });
-  await focusPaneSurface(cmux, workspaceRef, pane);
+
+  if (!(await tryFocusPaneSurface(cmux, workspaceRef, pane))) {
+    throw new Error(`Could not focus new thread surface ${newSurface.ref}.`);
+  }
 }
 
 function isThreadSurface(
@@ -121,6 +121,19 @@ async function focusPaneSurface(
     surfaceRef: target.surfaceRef,
     workspaceRef,
   });
+}
+
+async function tryFocusPaneSurface(
+  cmux: CmuxClient,
+  workspaceRef: string,
+  target: CmuxPaneSurfaceRef,
+): Promise<boolean> {
+  try {
+    await focusPaneSurface(cmux, workspaceRef, target);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function defaultNuggetCommand(): string {

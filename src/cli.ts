@@ -26,6 +26,7 @@ import {
   getJoinedSpaces,
   getPendingSpaceInvites,
   getSpaceChildRoomIds,
+  getSpaceRooms,
   inviteToRoom,
   isMatrixUserId,
   joinRoom,
@@ -595,9 +596,15 @@ async function handleWorkspaceControllerCommand(args: string[]): Promise<Command
       getJoinedSpaceRooms(client, spaceId).map((room) => room.roomId),
     );
     return await runSpaceRoomPicker({
-      loadRooms: () => getJoinedSpaceRooms(client, spaceId),
+      loadRooms: () => getSpaceRooms(client, spaceId),
+      onAcceptRoomInvite: async (room) => {
+        await joinRoom(client, room.roomId, { viaServers: room.viaServers });
+      },
       onInviteUser: async (userId) => {
         await inviteToRoom(client, spaceId, userId);
+      },
+      onJoinRoom: async (room) => {
+        await joinRoom(client, room.roomId, { viaServers: room.viaServers });
       },
       onOpenRoom: (roomId) => controller.openRoom(roomId),
       title: `Workspace: ${space.name}`,
@@ -733,6 +740,8 @@ async function handleOpenCommand(args: string[]): Promise<CommandResult> {
       return selection;
     }
 
+    await recordRecentDmIfJoinedDirect(client, selection.roomId);
+
     return await openChatView(client, selection.roomId, {
       onOpenThread: (threadRootEventId) =>
         openThreadBesideCurrentSurface(selection.roomId, threadRootEventId),
@@ -812,10 +821,7 @@ async function handleOpenRoom(roomId: string): Promise<CommandResult> {
   const result = await withMatrixClient(async (client) => {
     const room = resolveRoomOrThrow(client, roomId);
 
-    await recordRecentDm({
-      name: getRoomDisplayName(room),
-      roomId: room.roomId,
-    });
+    await recordRecentDmIfJoinedDirect(client, room.roomId);
 
     return await openChatView(client, room.roomId, {
       onOpenThread: (threadRootEventId) =>
@@ -947,10 +953,16 @@ async function handleCreateDm(userId: string): Promise<CommandResult> {
     const created = await createDirectRoom(client, userId);
     await recordRecentDm({ name: created.name, roomId: created.roomId });
 
-    return await openChatView(client, created.roomId, {
-      onOpenThread: (threadRootEventId) =>
-        openThreadBesideCurrentSurface(created.roomId, threadRootEventId),
-    });
+    try {
+      return await openChatView(client, created.roomId, {
+        onOpenThread: (threadRootEventId) =>
+          openThreadBesideCurrentSurface(created.roomId, threadRootEventId),
+      });
+    } catch (error) {
+      throw new Error(
+        `Created DM room ${created.roomId} for ${userId}, but could not open chat: ${formatError(error)}`,
+      );
+    }
   });
 
   return handleNavigationResult(result);
@@ -1019,10 +1031,16 @@ async function handleAcceptDmInvite(roomId: string): Promise<CommandResult> {
       roomId: joinedRoom.roomId,
     });
 
-    return await openChatView(client, joinedRoom.roomId, {
-      onOpenThread: (threadRootEventId) =>
-        openThreadBesideCurrentSurface(joinedRoom.roomId, threadRootEventId),
-    });
+    try {
+      return await openChatView(client, joinedRoom.roomId, {
+        onOpenThread: (threadRootEventId) =>
+          openThreadBesideCurrentSurface(joinedRoom.roomId, threadRootEventId),
+      });
+    } catch (error) {
+      throw new Error(
+        `Accepted DM invite and joined ${joinedRoom.roomId}, but could not open chat: ${formatError(error)}`,
+      );
+    }
   });
 
   return handleNavigationResult(result);
@@ -1192,6 +1210,24 @@ function pruneAppState(
     recentWorkspaces,
     version: state.version,
   };
+}
+
+async function recordRecentDmIfJoinedDirect(
+  client: MatrixClient,
+  roomId: string,
+): Promise<void> {
+  const directMessage = (await getJoinedDirectRooms(client)).find(
+    (candidate) => candidate.roomId === roomId,
+  );
+
+  if (!directMessage) {
+    return;
+  }
+
+  await recordRecentDm({
+    name: directMessage.name,
+    roomId: directMessage.roomId,
+  });
 }
 
 function parseLoginAction(value: string | undefined): LoginAction | null {

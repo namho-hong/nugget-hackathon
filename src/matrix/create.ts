@@ -142,36 +142,40 @@ export async function linkRoomToSpace(
   const childVia = options.childVia ?? [deriveVia(roomId)];
   const parentVia = options.parentVia ?? [deriveVia(spaceId)];
 
-  try {
-    await client.sendStateEvent(
-      spaceId,
-      EventType.SpaceChild,
-      {
-        suggested: options.suggested ?? true,
-        via: childVia,
-      },
-      roomId,
-    );
-  } catch (error) {
-    throw new Error(
-      `Could not link room ${roomId} to Space ${spaceId} with m.space.child: ${formatError(error)}`,
-    );
+  if (!hasStateEvent(client, spaceId, EventType.SpaceChild, roomId)) {
+    try {
+      await client.sendStateEvent(
+        spaceId,
+        EventType.SpaceChild,
+        {
+          suggested: options.suggested ?? true,
+          via: childVia,
+        },
+        roomId,
+      );
+    } catch (error) {
+      throw new Error(
+        `Could not link room ${roomId} to Space ${spaceId} with m.space.child: ${formatError(error)}`,
+      );
+    }
   }
 
-  try {
-    await client.sendStateEvent(
-      roomId,
-      EventType.SpaceParent,
-      {
-        canonical: true,
-        via: parentVia,
-      },
-      spaceId,
-    );
-  } catch (error) {
-    throw new Error(
-      `Wrote m.space.child on ${spaceId}, but could not write m.space.parent on ${roomId}: ${formatError(error)}`,
-    );
+  if (!hasStateEvent(client, roomId, EventType.SpaceParent, spaceId)) {
+    try {
+      await client.sendStateEvent(
+        roomId,
+        EventType.SpaceParent,
+        {
+          canonical: true,
+          via: parentVia,
+        },
+        spaceId,
+      );
+    } catch (error) {
+      throw new Error(
+        `Wrote or found m.space.child on ${spaceId}, but could not write m.space.parent on ${roomId}: ${formatError(error)}`,
+      );
+    }
   }
 }
 
@@ -204,9 +208,22 @@ export async function addDirectRoomAccountData(
     );
   }
 
-  nextContent[userId] = [roomId];
+  const existingRoomIds = nextContent[userId] ?? [];
+  nextContent[userId] = [
+    roomId,
+    ...existingRoomIds.filter((existingRoomId) => existingRoomId !== roomId),
+  ];
 
   await client.setAccountData(EventType.Direct, nextContent);
+}
+
+function hasStateEvent(
+  client: MatrixClient,
+  roomId: string,
+  eventType: EventType,
+  stateKey: string,
+): boolean {
+  return client.getRoom(roomId)?.currentState.getStateEvents(eventType, stateKey) != null;
 }
 
 async function isJoinedOnServer(client: MatrixClient, roomId: string): Promise<boolean> {

@@ -1,7 +1,7 @@
 import { emitKeypressEvents } from "node:readline";
 import type { ReadStream, WriteStream } from "node:tty";
 
-import type { JoinedRoom } from "../matrix/index.js";
+import type { SpaceRoom } from "../matrix/index.js";
 import { truncateDisplayText } from "../util/terminal.js";
 import { promptRequiredNavigation } from "./prompts.js";
 
@@ -12,6 +12,8 @@ interface SpaceRoomPickerIo {
 
 type PickerAction =
   | { type: "open-room"; roomId: string }
+  | { type: "join-room"; roomId: string }
+  | { type: "accept-room-invite"; roomId: string }
   | { type: "invite-user" }
   | { type: "refresh" }
   | { type: "home" }
@@ -34,8 +36,10 @@ type AnyPickerOption = PickerOption | DisabledPickerOption;
 
 export async function runSpaceRoomPicker(options: {
   title: string;
-  loadRooms: () => Promise<readonly JoinedRoom[]> | readonly JoinedRoom[];
+  loadRooms: () => Promise<readonly SpaceRoom[]> | readonly SpaceRoom[];
   onOpenRoom: (roomId: string) => Promise<void>;
+  onJoinRoom?: (room: SpaceRoom) => Promise<void>;
+  onAcceptRoomInvite?: (room: SpaceRoom) => Promise<void>;
   onInviteUser?: (userId: string) => Promise<void>;
   watchRoomActivity?: (onActivity: (roomId: string) => void) => () => void;
   io?: SpaceRoomPickerIo;
@@ -219,13 +223,60 @@ export async function runSpaceRoomPicker(options: {
       return;
     }
 
-    notice = `Opening ${selected.label}...`;
-    activeRoomIds.delete(selected.action.roomId);
-    render();
+    if (!("roomId" in selected.action)) {
+      return;
+    }
+
+    const selectedRoomId = selected.action.roomId;
+    const selectedRoom = rooms.find((room) => room.roomId === selectedRoomId);
+
+    if (!selectedRoom) {
+      notice = "Room is no longer visible. Refreshing...";
+      render();
+      await refresh();
+      notice = "";
+      render();
+      return;
+    }
+
+    if (selected.action.type === "join-room") {
+      notice = `Joining ${selectedRoom.name}...`;
+      render();
+
+      try {
+        await options.onJoinRoom?.(selectedRoom);
+        notice = `Joined ${selectedRoom.name}.`;
+        await refresh();
+      } catch (error) {
+        notice = error instanceof Error ? error.message : String(error);
+      }
+
+      render();
+      return;
+    }
+
+    if (selected.action.type === "accept-room-invite") {
+      notice = `Accepting invite to ${selectedRoom.name}...`;
+      render();
+
+      try {
+        await options.onAcceptRoomInvite?.(selectedRoom);
+        notice = `Accepted invite to ${selectedRoom.name}.`;
+        await refresh();
+      } catch (error) {
+        notice = error instanceof Error ? error.message : String(error);
+      }
+
+      render();
+      return;
+    }
 
     try {
-      await options.onOpenRoom(selected.action.roomId);
-      notice = `Opened ${selected.label}.`;
+      notice = `Opening ${selectedRoom.name}...`;
+      activeRoomIds.delete(selectedRoom.roomId);
+      render();
+      await options.onOpenRoom(selectedRoom.roomId);
+      notice = `Opened ${selectedRoom.name}.`;
     } catch (error) {
       notice = error instanceof Error ? error.message : String(error);
     }
@@ -252,7 +303,7 @@ export async function runSpaceRoomPicker(options: {
 
 function renderPicker(
   title: string,
-  rooms: readonly JoinedRoom[],
+  rooms: readonly SpaceRoom[],
   selectedIndex: number,
   columns: number,
   notice = "",
@@ -284,7 +335,7 @@ function renderPicker(
 }
 
 function selectableOptions(
-  rooms: readonly JoinedRoom[],
+  rooms: readonly SpaceRoom[],
   canInviteUser: boolean,
 ): PickerOption[] {
   return pickerOptions(rooms, canInviteUser).filter(
@@ -293,16 +344,13 @@ function selectableOptions(
 }
 
 function pickerOptions(
-  rooms: readonly JoinedRoom[],
+  rooms: readonly SpaceRoom[],
   canInviteUser: boolean,
 ): AnyPickerOption[] {
   const roomOptions: AnyPickerOption[] =
     rooms.length === 0
       ? [{ label: "No rooms in this workspace", disabled: true }]
-      : rooms.map((room) => ({
-          label: room.name,
-          action: { type: "open-room", roomId: room.roomId },
-        }));
+      : rooms.map((room) => roomOption(room));
 
   return [
     ...roomOptions,
@@ -323,7 +371,53 @@ function optionLabel(option: AnyPickerOption, activeRoomIds: ReadonlySet<string>
   return activeRoomIds.has(option.action.roomId) ? `* ${option.label}` : option.label;
 }
 
-function pruneActivity(activeRoomIds: Set<string>, rooms: readonly JoinedRoom[]): void {
+function roomOption(room: SpaceRoom): AnyPickerOption {
+  const label = `${room.name}  ${statusLabel(room)}`;
+
+  if (room.status === "joined") {
+    return {
+      label,
+      action: { type: "open-room", roomId: room.roomId },
+    };
+  }
+
+  if (room.status === "invited") {
+    return {
+      label,
+      action: { type: "accept-room-invite", roomId: room.roomId },
+    };
+  }
+
+  if (room.status === "joinable") {
+    return {
+      label,
+      action: { type: "join-room", roomId: room.roomId },
+    };
+  }
+
+  return {
+    label,
+    disabled: true,
+  };
+}
+
+function statusLabel(room: SpaceRoom): string {
+  if (room.status === "joined") {
+    return "Joined";
+  }
+
+  if (room.status === "invited") {
+    return "Invite pending";
+  }
+
+  if (room.status === "joinable") {
+    return "Join";
+  }
+
+  return "No access";
+}
+
+function pruneActivity(activeRoomIds: Set<string>, rooms: readonly SpaceRoom[]): void {
   const roomIds = new Set(rooms.map((room) => room.roomId));
 
   for (const roomId of activeRoomIds) {

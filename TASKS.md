@@ -8,35 +8,35 @@ files, and treats stale cmux panes as hints instead of authoritative state.
 
 ## Definition of Done
 
-- [ ] Matrix credentials remain isolated in `session.json`.
-- [ ] Non-secret app state is stored in a separate `state.json`.
-- [ ] Corrupt session files produce an actionable recovery message.
-- [ ] Corrupt or unknown app-state files do not block login or chat.
-- [ ] Home menu ranks Matrix-derived workspaces and DMs with recent hints only.
-- [ ] Workspace and DM opens record recent hints.
-- [ ] `reset-state` clears app state without logging out.
-- [ ] `doctor` prints local diagnostics without exposing secrets.
-- [ ] cmux workspace scoring keeps description matches highest priority.
-- [ ] Stale room, thread, and agent pane focus failures open fresh panes where
+- [x] Matrix credentials remain isolated in `session.json`.
+- [x] Non-secret app state is stored in a separate `state.json`.
+- [x] Corrupt session files produce an actionable recovery message.
+- [x] Corrupt or unknown app-state files do not block login or chat.
+- [x] Home menu ranks Matrix-derived workspaces and DMs with recent hints only.
+- [x] Workspace and DM opens record recent hints.
+- [x] `reset-state` clears app state without logging out.
+- [x] `doctor` prints local diagnostics without exposing secrets.
+- [x] cmux workspace scoring keeps description matches highest priority.
+- [x] Stale room, thread, and agent pane focus failures open fresh panes where
   the current code has those pane types.
-- [ ] Partial Matrix create/link/open failures report created durable IDs.
-- [ ] `pnpm build` passes.
-- [ ] `./nugget --help`, `./nugget reset-state`, and `./nugget doctor` run.
+- [x] Partial Matrix create/link/open failures report created durable IDs.
+- [x] `pnpm build` passes.
+- [x] `./nugget --help`, `./nugget reset-state`, and `./nugget doctor` run.
 - [x] Working diff is reviewed for unrelated edits.
 
 ## Checklist
 
 - [x] Read `docs/persistence-recovery-plan.md`.
 - [x] Inspect store, CLI, home, Matrix create, and cmux controller code.
-- [ ] Add `src/store/app-state.ts`.
-- [ ] Export app-state helpers from `src/store/index.ts`.
-- [ ] Improve session load diagnostics without changing credential storage.
-- [ ] Rank home workspaces and DMs with validated app-state recents.
-- [ ] Record recent workspace and DM opens.
-- [ ] Add `reset-state` and `doctor` commands.
-- [ ] Harden cmux stale focus handling.
-- [ ] Improve partial create/link/open messages.
-- [ ] Run verification commands.
+- [x] Add `src/store/app-state.ts`.
+- [x] Export app-state helpers from `src/store/index.ts`.
+- [x] Improve session load diagnostics without changing credential storage.
+- [x] Rank home workspaces and DMs with validated app-state recents.
+- [x] Record recent workspace and DM opens.
+- [x] Add `reset-state` and `doctor` commands.
+- [x] Harden cmux stale focus handling.
+- [x] Improve partial create/link/open messages.
+- [x] Run verification commands.
 - [x] Review working diff for accidental unrelated edits.
 
 ## Verification Commands
@@ -59,9 +59,17 @@ Manual verification requiring Matrix account and cmux:
 
 ## Current Status
 
-Initial inspection is complete. Existing uncommitted membership changes in
-`src/cli.ts`, `src/matrix/index.ts`, and `src/matrix/membership.ts` are treated
-as pre-existing work and will be preserved.
+Implementation is complete with local verification:
+
+- `pnpm build`
+- `./nugget --help`
+- `./nugget reset-state`
+- `./nugget doctor`
+- `git diff --check`
+
+Manual live Matrix/cmux verification still requires a Matrix account and a
+running cmux session. `./nugget doctor` reported cmux unavailable in this
+sandboxed run because the cmux socket was not accessible.
 
 # Join Leave And Invite UX
 
@@ -160,25 +168,25 @@ has already joined, and let the user join or accept invites from that list.
 
 Definition of Done:
 
-- [ ] Workspace picker shows joined child rooms as openable.
-- [ ] Workspace picker shows invited child rooms with an accept action.
-- [ ] Workspace picker shows unjoined visible child rooms with a join action.
-- [ ] Workspace picker shows missing/inaccessible child rooms as disabled.
-- [ ] Joining or accepting a child room refreshes the picker and then allows
+- [x] Workspace picker shows joined child rooms as openable.
+- [x] Workspace picker shows invited child rooms with an accept action.
+- [x] Workspace picker shows unjoined visible child rooms with a join action.
+- [x] Workspace picker shows missing/inaccessible child rooms as disabled.
+- [x] Joining or accepting a child room refreshes the picker and then allows
   opening the room.
-- [ ] Existing workspace activity tracking continues to watch joined rooms only.
-- [ ] `pnpm build` passes.
-- [ ] `git diff --check` passes.
+- [x] Existing workspace activity tracking continues to watch joined rooms only.
+- [x] `pnpm build` passes.
+- [x] `git diff --check` passes.
 
 Checklist:
 
 - [x] Inspect current Space child room filtering.
 - [x] Inspect workspace picker action flow.
-- [ ] Add child-room summary/status helper.
-- [ ] Extend workspace picker actions and rendering.
-- [ ] Wire join/accept actions in workspace controller.
-- [ ] Run verification commands.
-- [ ] Review working diff for accidental unrelated edits.
+- [x] Add child-room summary/status helper.
+- [x] Extend workspace picker actions and rendering.
+- [x] Wire join/accept actions in workspace controller.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
 
 Verification Commands:
 
@@ -197,9 +205,15 @@ Manual verification requiring Matrix account and cmux:
 
 Current Status:
 
-Started. `getJoinedSpaceRooms()` currently filters Space children down to
-locally visible joined non-Space rooms only, so unjoined/invited children are not
-represented in the workspace picker.
+Implementation now loads Space children with hierarchy metadata where available,
+renders status labels, and wires open/join/accept behavior. Local verification
+passed:
+
+- `pnpm build`
+- `git diff --check`
+
+Manual Matrix/cmux verification still requires a workspace with joined, invited,
+joinable, and inaccessible child rooms.
 
 ## Follow-up: Workspace Invite Accept Sync
 

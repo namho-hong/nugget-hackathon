@@ -21,6 +21,7 @@ export type RoomMembershipState =
 export async function joinRoom(
   client: MatrixClient,
   roomIdOrAlias: string,
+  options: { viaServers?: string[] } = {},
 ): Promise<string> {
   const target = roomIdOrAlias.trim();
 
@@ -29,7 +30,11 @@ export async function joinRoom(
   }
 
   try {
-    const room = await client.joinRoom(target);
+    const room = await client.joinRoom(target, {
+      ...(options.viaServers && options.viaServers.length > 0
+        ? { viaServers: options.viaServers }
+        : {}),
+    });
     await waitForRoomMembership(client, room.roomId, "join");
     return room.roomId;
   } catch (error) {
