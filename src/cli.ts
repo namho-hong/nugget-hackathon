@@ -49,6 +49,7 @@ import {
   launchWorkspace,
   openDirectRoomBesideCurrentSurface,
   openThreadBesideCurrentSurface,
+  renameCurrentWorkspace,
 } from "./cmux/index.js";
 import {
   clearAppState,
@@ -270,6 +271,7 @@ async function handleDefaultHome(): Promise<CommandResult> {
     return handleLogin([]);
   }
 
+  await renameCurrentWorkspaceBestEffort("nugget: Home");
   process.stdout.write("Loading Matrix account state...\n");
   const action = await selectHomeActionFromMatrix();
 
@@ -796,8 +798,10 @@ async function handleSendCommand(args: string[]): Promise<CommandResult> {
 async function handleOpenRoom(roomId: string): Promise<CommandResult> {
   const result = await withMatrixClient(async (client) => {
     const room = await waitForJoinedRoom(client, roomId);
+    const roomName = getRoomDisplayName(room);
 
     await recordRecentDmIfJoinedDirect(client, room.roomId);
+    await renameCurrentWorkspaceBestEffort(`nugget: ${roomName}`);
 
     return await openChatView(client, room.roomId, {
       onOpenThread: (threadRootEventId) =>
@@ -824,6 +828,7 @@ async function openDirectRoomFromClient(
   const directRooms = await getJoinedDirectRooms(client);
   const directRoomIds = new Set(directRooms.map((directRoom) => directRoom.roomId));
   const directRoom = directRooms.find((item) => item.roomId === room.roomId);
+  const roomName = directRoom?.name ?? getRoomDisplayName(room);
 
   directRoomIds.add(room.roomId);
 
@@ -835,6 +840,8 @@ async function openDirectRoomFromClient(
   } else {
     await recordRecentDmIfJoinedDirect(client, room.roomId);
   }
+
+  await renameCurrentWorkspaceBestEffort(`nugget: ${roomName}`);
 
   if (
     await openDirectRoomBesideCurrentSurface(room.roomId, {
@@ -945,6 +952,14 @@ async function getCurrentCmuxContext(): Promise<{
   }
 
   return { surfaceRef, workspaceRef: currentWorkspaceRef };
+}
+
+async function renameCurrentWorkspaceBestEffort(title: string): Promise<void> {
+  try {
+    await renameCurrentWorkspace(title);
+  } catch {
+    // Workspace titles are best-effort; plain terminal flows should keep working.
+  }
 }
 
 function resolveJoinedSpace(

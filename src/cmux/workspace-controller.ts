@@ -6,7 +6,9 @@ import {
   findWorkspace,
   getWorkspaceSurfaces,
   getWorkspaces,
+  type CmuxPane,
   type CmuxPaneSurfaceRef,
+  type CmuxSurface,
   type CmuxTree,
   type CmuxWorkspace,
 } from "./client.js";
@@ -39,7 +41,7 @@ export class WorkspaceController {
 
     for (const roomId of roomIds) {
       const surface = getWorkspaceSurfaces(workspace).find((candidate) =>
-        isRoomSurface(candidate.title ?? "", roomId),
+        isRoomSurface(candidate, roomId),
       );
 
       if (!surface) {
@@ -74,41 +76,25 @@ export class WorkspaceController {
 
     const beforeTree = await this.cmux.tree({ all: true });
     const beforeWorkspace = requiredWorkspace(beforeTree, this.workspaceRef);
-    const beforeSurfaceRefs = new Set(
-      getWorkspaceSurfaces(beforeWorkspace).map((surface) => surface.ref),
+    const targetPane = findReusableRoomPane(
+      beforeWorkspace,
+      this.pickerPaneRef,
+      this.lastRoomSurfaceRef,
     );
-    const splitFromSurfaceRef = this.lastRoomSurfaceRef ?? this.pickerSurfaceRef;
-    const direction = this.lastRoomSurfaceRef ? "down" : "right";
+    const paneSurface = targetPane
+      ? await this.cmux.newSurface({
+          paneRef: targetPane.ref,
+          workspaceRef: this.workspaceRef,
+        })
+      : await this.createRoomPane();
 
-    await this.cmux.newSplit(direction, {
-      surfaceRef: splitFromSurfaceRef,
-      workspaceRef: this.workspaceRef,
-    });
+    await this.respawnRoom(roomId, paneSurface.surfaceRef);
 
-    const afterTree = await this.cmux.tree({ all: true });
-    const afterWorkspace = requiredWorkspace(afterTree, this.workspaceRef);
-    const newSurface = getWorkspaceSurfaces(afterWorkspace).find(
-      (surface) => !beforeSurfaceRefs.has(surface.ref) && surface.type !== "browser",
-    );
-
-    if (!newSurface) {
-      throw new Error("cmux split succeeded, but Nugget could not find the new surface.");
-    }
-
-    const paneRef = findSurfacePane(afterWorkspace, newSurface.ref)?.paneRef;
-
-    if (!paneRef) {
-      throw new Error(`cmux surface ${newSurface.ref} has no containing pane.`);
-    }
-
-    await this.respawnRoom(roomId, newSurface.ref);
-
-    const paneSurface = { paneRef, surfaceRef: newSurface.ref };
     this.openedRooms.set(roomId, paneSurface);
-    this.lastRoomSurfaceRef = newSurface.ref;
+    this.lastRoomSurfaceRef = paneSurface.surfaceRef;
     await this.tryFocus(paneSurface);
 
-    if (direction === "right" && this.pickerPaneRef) {
+    if (!targetPane && this.pickerPaneRef) {
       this.cmux
         .resizePane({
           amount: PICKER_RESIZE_AMOUNT,
@@ -118,6 +104,26 @@ export class WorkspaceController {
         })
         .catch(() => {});
     }
+  }
+
+  private async createRoomPane(): Promise<CmuxPaneSurfaceRef> {
+    const split = await this.cmux.newSplit("right", {
+      surfaceRef: this.pickerSurfaceRef,
+      workspaceRef: this.workspaceRef,
+    });
+    const workspace = findWorkspace(await this.cmux.tree({ all: true }), this.workspaceRef);
+
+    if (!workspace) {
+      throw new Error(`cmux workspace ${this.workspaceRef} was not found after split.`);
+    }
+
+    const paneSurface = findSurfacePane(workspace, split.surfaceRef);
+
+    if (!paneSurface) {
+      throw new Error(`cmux surface ${split.surfaceRef} has no containing pane.`);
+    }
+
+    return paneSurface;
   }
 
   private async tryFocus(target: CmuxPaneSurfaceRef): Promise<boolean> {
@@ -158,6 +164,10 @@ export class WorkspaceController {
 }
 
 export async function launchWorkspace(workspace: MatrixWorkspace): Promise<void> {
+  await renameCurrentWorkspace(workspaceTitle(workspace.name));
+}
+
+export async function renameCurrentWorkspace(title: string): Promise<void> {
   const cmux = new CmuxClient();
   const tree = await cmux.tree({ all: true, preserveCallerEnv: true });
   const workspaceRef =
@@ -170,7 +180,7 @@ export async function launchWorkspace(workspace: MatrixWorkspace): Promise<void>
   }
 
   await cmux.renameWorkspace({
-    title: workspaceTitle(workspace.name),
+    title,
     workspaceRef,
   });
 }
@@ -247,8 +257,45 @@ function requiredWorkspace(tree: CmuxTree, workspaceRef: string): CmuxWorkspace 
   return workspace;
 }
 
-function isRoomSurface(title: string, roomId: string): boolean {
-  return title.includes(roomId) && title.includes("room");
+function isRoomSurface(surface: CmuxSurface, roomId: string): boolean {
+  const haystack = surfaceHaystack(surface);
+  return haystack.includes(roomId) && /\broom\b/.test(haystack);
+}
+
+function isAnyRoomSurface(surface: CmuxSurface): boolean {
+  return /\broom\b/.test(surfaceHaystack(surface));
+}
+
+function surfaceHaystack(surface: CmuxSurface): string {
+  return `${surface.title ?? ""} ${surface.command ?? ""}`;
+}
+
+export function findReusableRoomPane(
+  workspace: CmuxWorkspace,
+  pickerPaneRef: string | null,
+  preferredSurfaceRef: string | null = null,
+): CmuxPane | null {
+  if (preferredSurfaceRef) {
+    const preferredPane = (workspace.panes ?? []).find(
+      (pane) =>
+        pane.ref !== pickerPaneRef &&
+        (pane.surfaces ?? []).some((surface) => surface.ref === preferredSurfaceRef),
+    );
+
+    if (preferredPane) {
+      return preferredPane;
+    }
+  }
+
+  return (
+    (workspace.panes ?? []).find((pane) => {
+      if (pane.ref === pickerPaneRef) {
+        return false;
+      }
+
+      return (pane.surfaces ?? []).some((surface) => isAnyRoomSurface(surface));
+    }) ?? null
+  );
 }
 
 export function findWorkspaceControllerSurface(
@@ -265,8 +312,8 @@ export function findWorkspaceControllerSurface(
 
 function hasNuggetRoomSurface(workspace: CmuxWorkspace): boolean {
   return getWorkspaceSurfaces(workspace).some((surface) => {
-    const title = surface.title ?? "";
-    return title.includes("nugget") && /\broom\b/.test(title);
+    const haystack = surfaceHaystack(surface);
+    return haystack.includes("nugget") && /\broom\b/.test(haystack);
   });
 }
 

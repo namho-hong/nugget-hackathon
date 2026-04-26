@@ -5,6 +5,7 @@ import test from "node:test";
 import { getWorkspaceSurfaces, getWorkspaces, parseCmuxTreeJson } from "../src/cmux/client.js";
 import {
   findNuggetWorkspace,
+  findReusableRoomPane,
   findWorkspaceControllerSurface,
   shouldReuseRoomSurface,
   workspaceDescription,
@@ -46,4 +47,47 @@ test("stale room surfaces are reused only after respawn and focus both succeed",
   assert.equal(shouldReuseRoomSurface(true, true), true);
   assert.equal(shouldReuseRoomSurface(true, false), false);
   assert.equal(shouldReuseRoomSurface(false, false), false);
+});
+
+test("workspace room opens reuse an existing non-picker room pane", () => {
+  const tree = parseCmuxTreeJson(fixture("cmux-tree-workspace.json"));
+  const workspace = findNuggetWorkspace(tree, "!space:example.org", "Product");
+
+  assert.equal(findReusableRoomPane(workspace!, "pane:1")?.ref, "pane:2");
+});
+
+test("workspace room pane reuse prefers the last opened room surface pane", () => {
+  const tree = parseCmuxTreeJson(
+    JSON.stringify({
+      windows: [
+        {
+          workspaces: [
+            {
+              ref: "workspace:1",
+              panes: [
+                {
+                  ref: "pane:picker",
+                  surfaces: [{ ref: "surface:picker", title: "nugget workspace-controller" }],
+                },
+                {
+                  ref: "pane:old-room",
+                  surfaces: [{ ref: "surface:old", title: "nugget room !old:example.org" }],
+                },
+                {
+                  ref: "pane:last-room",
+                  surfaces: [{ ref: "surface:last", title: "nugget room !last:example.org" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  const workspace = getWorkspaces(tree)[0]!;
+
+  assert.equal(
+    findReusableRoomPane(workspace, "pane:picker", "surface:last")?.ref,
+    "pane:last-room",
+  );
 });

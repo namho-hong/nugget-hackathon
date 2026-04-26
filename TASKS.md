@@ -981,3 +981,142 @@ Diff review notes:
   call sites in `src/cli.ts`, and this `TASKS.md` section.
 - Existing in-progress cmux/DM changes in `src/cli.ts`, `src/cmux/*`, and
   `src/ui/home-menu.ts` are preserved.
+
+# Workspace Room Pane Surface Reuse
+
+Goal: Opening another room from a Nugget workspace should reuse the existing room
+pane by adding a new cmux surface instead of creating another pane when a room
+pane is already present.
+
+Definition of Done:
+
+- [x] First room opened from a workspace still creates a right-side room pane.
+- [x] Additional workspace rooms open as new surfaces in the existing room pane.
+- [x] Reopening the same room still focuses/reuses its existing surface when it
+  can be respawned and focused.
+- [x] `pnpm build` passes.
+- [x] Relevant tests pass.
+- [x] Working diff is reviewed for accidental unrelated edits.
+
+Checklist:
+
+- [x] Inspect workspace room open and cmux surface helpers.
+- [x] Compare existing DM pane surface reuse behavior.
+- [x] Update workspace room opening to prefer `cmux new-surface` on an existing
+  room pane.
+- [x] Add focused coverage for room pane selection behavior.
+- [x] Run verification commands.
+- [x] Review working diff.
+
+Verification Commands:
+
+```sh
+pnpm build
+pnpm test
+```
+
+Manual verification requiring Matrix account and cmux:
+
+```sh
+./nugget workspace "<joined-space-id>"
+# Open one workspace room, then another; confirm the second appears as a new
+# surface in the existing room pane instead of creating another pane.
+```
+
+Current status:
+
+Implementation is complete at build/test level. `WorkspaceController` now uses
+`new-surface` when a non-picker room pane already exists, while the first room
+still creates the initial right-side split.
+
+Verification run:
+
+- `pnpm build`
+- `pnpm test`
+
+Diff review notes:
+
+- This change intentionally updates `src/cmux/workspace-controller.ts`,
+  `tests/cmux-tree.test.ts`, and this `TASKS.md` section.
+- The `renameCurrentWorkspace` hunk in `src/cmux/workspace-controller.ts`,
+  `src/cli.ts`, `src/cmux/dm-controller.ts`, and the later DM cmux
+  stale-context `TASKS.md` section are separate worktree changes and were left
+  intact.
+
+# DM cmux Stale Context
+
+Goal: Opening a DM from Home should not fail when caller-only cmux environment
+variables contain a stale workspace ID that is no longer present in `cmux tree`.
+
+Definition of Done:
+
+- [x] DM cmux context selection prefers valid `cmux tree` caller/active refs.
+- [x] Stale `CMUX_WORKSPACE_ID` values are ignored unless they resolve to a
+  workspace and surface in the current tree.
+- [x] If no valid cmux context is available, DM opening falls back to inline chat
+  instead of throwing `cmux workspace ... was not found`.
+- [x] `pnpm build` passes.
+- [x] Working diff is reviewed for accidental unrelated edits.
+
+Checklist:
+
+- [x] Inspect DM cmux context selection.
+- [x] Compare with the earlier workspace caller-context issue.
+- [x] Validate cmux context candidates against the current tree.
+- [x] Run verification commands.
+- [x] Review working diff.
+
+Verification Commands:
+
+```sh
+pnpm build
+git diff --check
+```
+
+Current status:
+
+Updated `currentCmuxContext` to try `tree.caller`, then `tree.active`, then
+environment variables, and to accept a candidate only when both its workspace
+and surface exist in the current `cmux tree`. Local verification passed:
+
+- `pnpm build`
+- `git diff --check`
+
+# cmux Workspace Title Sync
+
+Goal: The current cmux workspace title should follow Nugget's active screen:
+Home, a selected Matrix workspace, or a selected DM/chat.
+
+Definition of Done:
+
+- [x] Entering Home renames the current cmux workspace to `nugget: Home`.
+- [x] Opening a Matrix workspace renames the current cmux workspace to that
+  workspace name.
+- [x] Opening a DM or room chat renames the current cmux workspace to that
+  room's display name.
+- [x] Title updates are best-effort and do not break non-cmux terminal flows.
+- [x] `pnpm build` passes.
+- [x] `git diff --check` passes.
+
+Checklist:
+
+- [x] Inspect Home, workspace, and DM/chat transition paths.
+- [x] Add shared current-workspace rename helper.
+- [x] Wire title updates into Home and DM/chat entry paths.
+- [x] Run verification commands.
+- [x] Review working diff.
+
+Verification Commands:
+
+```sh
+pnpm build
+git diff --check
+```
+
+Current status:
+
+Implemented title sync for Home and DM/chat paths. Existing workspace title sync
+now uses the same `renameCurrentWorkspace` helper. Local verification passed:
+
+- `pnpm build`
+- `git diff --check`
