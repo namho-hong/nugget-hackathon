@@ -35,6 +35,7 @@ import {
   joinRoom,
   leaveRoom,
   loginWithSso,
+  rejectRoomInvite,
   resolveRoomOrThrow,
   waitForJoinedSpace,
   waitForJoinedRoom,
@@ -57,6 +58,7 @@ import {
 import {
   clearAppState,
   clearSession,
+  dismissInviteRoom,
   getAppStatePath,
   getSessionPath,
   forgetRecentDm,
@@ -299,10 +301,13 @@ async function selectHomeActionFromMatrix(): Promise<HomeAction> {
       await saveAppState(prunedState);
     }
 
+    const dismissedInviteRoomIds = new Set(prunedState.dismissedInviteRoomIds);
     const pendingDirectInvites = getPendingDirectRoomInvites(client, {
       excludeRoomIds: childRooms.roomIds,
-    });
-    const pendingWorkspaceInvites = getPendingSpaceInvites(client);
+    }).filter((invite) => !dismissedInviteRoomIds.has(invite.roomId));
+    const pendingWorkspaceInvites = getPendingSpaceInvites(client).filter(
+      (invite) => !dismissedInviteRoomIds.has(invite.roomId),
+    );
     const openDirectRoomIds = await getOpenDirectRoomIds(
       new Set(directMessages.map((directMessage) => directMessage.roomId)),
     );
@@ -435,7 +440,10 @@ async function handleDoctor(): Promise<CommandResult> {
   const appState = await loadAppState();
   lines.push(`App state path: ${appState.path}`);
   lines.push(
-    `App state: ${appState.warnings.length > 0 ? "ignored" : "ok"} (${appState.state.recentWorkspaces.length} workspaces, ${appState.state.recentDms.length} DMs)`,
+    `App state: ${appState.warnings.length > 0 ? "ignored" : "ok"} (` +
+      `${appState.state.recentWorkspaces.length} workspaces, ` +
+      `${appState.state.recentDms.length} DMs, ` +
+      `${appState.state.dismissedInviteRoomIds.length} dismissed invites)`,
   );
 
   for (const warning of appState.warnings) {
@@ -1154,6 +1162,7 @@ async function handleAcceptDmInvite(roomId: string): Promise<CommandResult> {
     const joinedRoomId = await joinRoom(client, roomId, {
       viaServers: getInviteViaServers(client.getRoom(roomId), [invite.inviterUserId]),
     });
+    await dismissInviteRoom(roomId);
     const joinedRoom = await waitForJoinedRoom(client, joinedRoomId);
     const directUserId = invite.inviterUserId;
     const currentUserId = client.getUserId();
@@ -1196,6 +1205,7 @@ async function handleAcceptWorkspaceInvite(spaceId: string): Promise<CommandResu
     const joinedSpaceId = await joinRoom(client, spaceId, {
       viaServers: getInviteViaServers(client.getRoom(spaceId), [invite.inviterUserId]),
     });
+    await dismissInviteRoom(spaceId);
     await waitForRoomMembership(client, joinedSpaceId, "join");
     const joinedSpaceSummary = await waitForJoinedSpace(client, joinedSpaceId);
     const syncedSpace = client.getRoom(joinedSpaceId);
@@ -1229,39 +1239,39 @@ async function handleAcceptWorkspaceInvite(spaceId: string): Promise<CommandResu
 }
 
 async function handleRejectWorkspaceInvite(spaceId: string): Promise<CommandResult> {
-  return withMatrixClient(async (client) => {
+  const result = await withMatrixClient(async (client) => {
     const invite = getPendingSpaceInvites(client).find((item) => item.roomId === spaceId);
 
     if (!invite) {
       throw new Error(`Workspace invite ${spaceId} is no longer pending.`);
     }
 
-    await leaveRoom(client, spaceId);
+    await rejectRoomInvite(client, spaceId);
+    await dismissInviteRoom(spaceId);
+    process.stdout.write(`Rejected workspace invite from ${invite.inviterUserId}.\n`);
 
-    return {
-      exitCode: 0,
-      output: `Rejected workspace invite from ${invite.inviterUserId}.\n`,
-      stream: "stdout",
-    };
+    return { type: "home" } as const;
   });
+
+  return handleNavigationResult(result);
 }
 
 async function handleRejectDmInvite(roomId: string): Promise<CommandResult> {
-  return withMatrixClient(async (client) => {
+  const result = await withMatrixClient(async (client) => {
     const invite = getPendingDirectRoomInvites(client).find((item) => item.roomId === roomId);
 
     if (!invite) {
       throw new Error(`DM invite ${roomId} is no longer pending.`);
     }
 
-    await leaveRoom(client, roomId);
+    await rejectRoomInvite(client, roomId);
+    await dismissInviteRoom(roomId);
+    process.stdout.write(`Rejected DM invite from ${invite.inviterUserId}.\n`);
 
-    return {
-      exitCode: 0,
-      output: `Rejected DM invite from ${invite.inviterUserId}.\n`,
-      stream: "stdout",
-    };
+    return { type: "home" } as const;
   });
+
+  return handleNavigationResult(result);
 }
 
 async function handleNavigationResult(result: {
@@ -1351,6 +1361,7 @@ function pruneAppState(
 
   return {
     ...(state.lastOpenedAt === undefined ? {} : { lastOpenedAt: state.lastOpenedAt }),
+    dismissedInviteRoomIds: state.dismissedInviteRoomIds,
     recentDms,
     recentWorkspaces,
     version: state.version,

@@ -1,3 +1,174 @@
+# Left DM Home Refresh
+
+## Goal
+
+Make left DMs disappear from the home DM list after refresh, even when local
+Matrix sync still reports the old joined membership.
+
+## Definition of Done
+
+- [x] Home DM list hides rooms whose server membership is no longer `join`.
+- [x] Home DM list still tolerates accepted invites whose server membership is
+  already `join`.
+- [x] Focused test covers stale local joined membership after server leave.
+- [x] `pnpm build` passes.
+- [x] Relevant tests pass.
+- [x] `git diff --check` passes.
+
+## Checklist
+
+- [x] Inspect DM list membership filtering and leave cleanup.
+- [x] Use explicit server membership to override stale local join/leave state.
+- [x] Add focused coverage.
+- [x] Run verification commands.
+
+## Verification Commands
+
+```sh
+pnpm build
+pnpm test
+git diff --check
+```
+
+## Current Status
+
+Implementation is complete with local verification:
+
+- `pnpm build`
+- `pnpm test`
+- `git diff --check`
+
+The DM list now uses explicit server membership when available, so stale local
+`join` does not keep a left DM visible and stale local `invite` can still show an
+accepted DM when the server already reports `join`.
+
+# Left Workspace Home Cleanup
+
+## Goal
+
+Stop showing Matrix Spaces on the home screen after the user has already left
+them, even when the local Matrix SDK room store still reports stale `join`
+membership.
+
+## Definition of Done
+
+- [x] Home workspace list excludes spaces missing from the server joined-room list.
+- [x] Opening a stale left workspace fails with an actionable not-joined error.
+- [x] Focused tests cover stale local joined Space state.
+- [x] `pnpm build` passes.
+- [x] Relevant tests pass.
+- [x] `git diff --check` passes.
+
+## Checklist
+
+- [x] Inspect home workspace listing and workspace open paths.
+- [x] Add server-authoritative joined-space filtering.
+- [x] Add focused tests.
+- [x] Run verification commands.
+
+## Verification Commands
+
+```sh
+pnpm build
+pnpm test
+git diff --check
+```
+
+## Current Status
+
+Implementation is complete with local verification:
+
+- `pnpm build`
+- `pnpm exec tsx --test tests/*.test.ts`
+- `git diff --check`
+
+Home workspaces now cross-check the homeserver joined-room list, and stale
+locally joined Spaces fail before opening with an actionable message.
+
+# Accepted Invite Home Refresh
+
+## Goal
+
+Make accepted invites disappear from the already-open home picker after refresh,
+and make the accepted DM appear in the DM list, even when Matrix sync still
+reports the old invite membership locally.
+
+## Definition of Done
+
+- [x] Accepted DM invites are recorded as dismissed for home pending filtering.
+- [x] Accepted workspace invites are recorded as dismissed for home pending filtering.
+- [x] Accepted DMs are listed when server membership is joined but local sync is stale.
+- [x] Focused test covers accepted DM list behavior with stale local invite membership.
+- [x] `pnpm build` passes.
+- [x] Relevant tests pass.
+- [x] `git diff --check` passes.
+
+## Checklist
+
+- [x] Inspect accept invite handlers and home pending invite filtering.
+- [x] Dismiss accepted invite room IDs after successful joins.
+- [x] Include server-joined direct rooms in the DM list during stale local sync.
+- [x] Run verification commands.
+
+## Verification Commands
+
+```sh
+pnpm build
+pnpm test
+git diff --check
+```
+
+## Current Status
+
+Implementation is complete with local verification:
+
+- `pnpm build`
+- `pnpm test`
+- `git diff --check`
+
+Accepted DM and workspace invites now add the invite room ID to the same local
+dismissed list used by home pending filtering. The DM list also includes direct
+rooms whose local sync membership is stale but whose server membership is
+already `join`.
+
+# Direct Room Open After Accepted Invite
+
+## Goal
+
+Make `nugget room <roomId>` tolerate a stale local invite membership when the
+homeserver already reports the current session as joined.
+
+## Definition of Done
+
+- [x] Direct room open waits when local sync still says `invite` but server state
+  says the user is joined.
+- [x] Direct room open still fails clearly when the server does not report joined.
+- [x] Focused test covers stale invite-to-join sync behavior.
+- [x] `pnpm build` passes.
+
+## Checklist
+
+- [x] Inspect direct room open and joined-room resolution flow.
+- [x] Update joined-room wait logic for stale non-join memberships.
+- [x] Add focused coverage.
+- [x] Run verification.
+
+## Verification Commands
+
+```sh
+pnpm test
+pnpm build
+git diff --check
+```
+
+## Current Status
+
+Implementation is complete with local verification:
+
+- `pnpm test`
+- `pnpm build`
+- `git diff --check`
+
 # Invite Accept And Reject Refresh
 
 ## Goal

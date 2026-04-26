@@ -69,10 +69,13 @@ export async function getSpaceStateName(
 }
 
 export async function getJoinedSpaces(client: MatrixClient): Promise<JoinedSpace[]> {
+  const serverJoinedRoomIds = await getServerJoinedRoomIds(client);
+
   return client
     .getRooms()
     .filter((room) => isJoinedRoom(room))
     .filter((room) => isSpaceRoom(room))
+    .filter((room) => serverJoinedRoomIds === null || serverJoinedRoomIds.has(room.roomId))
     .map((room) => spaceSummary(room))
     .sort(compareRooms);
 }
@@ -117,8 +120,14 @@ export async function waitForJoinedSpace(
 
   const initial = currentSpace();
 
-  if (initial.kind === "ready") {
+  const serverJoined = await isJoinedOnServer(client, spaceId);
+
+  if (initial.kind === "ready" && serverJoined !== false) {
     return spaceSummary(initial.room);
+  }
+
+  if (serverJoined === false) {
+    throw joinedSpaceWaitError(spaceId, initial.status);
   }
 
   return await new Promise<JoinedSpace>((resolve, reject) => {
@@ -179,6 +188,39 @@ export async function waitForJoinedSpace(
     client.on(RoomEvent.MyMembership, onMembership);
     check();
   });
+}
+
+async function isJoinedOnServer(
+  client: MatrixClient,
+  roomId: string,
+): Promise<boolean | null> {
+  const joinedRoomIds = await getServerJoinedRoomIds(client);
+
+  return joinedRoomIds === null ? null : joinedRoomIds.has(roomId);
+}
+
+async function getServerJoinedRoomIds(client: MatrixClient): Promise<Set<string> | null> {
+  try {
+    const response = await client.getJoinedRooms();
+
+    if (!Array.isArray(response.joined_rooms)) {
+      return null;
+    }
+
+    return new Set(response.joined_rooms);
+  } catch {
+    return null;
+  }
+}
+
+function joinedSpaceWaitError(spaceId: string, status: string): Error {
+  if (status === "ready") {
+    return new Error(
+      `Space ${spaceId} is still present in local Matrix sync as joined, but the homeserver no longer reports this session as joined. Refresh home or join it again before opening.`,
+    );
+  }
+
+  return new Error(`Space ${spaceId} is not joined by the current Matrix session (${status}).`);
 }
 
 export async function getSpaceChildRoomIds(

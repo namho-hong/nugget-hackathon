@@ -5,11 +5,13 @@ import { getNuggetConfigDir } from "./session.js";
 
 const APP_STATE_VERSION = 1;
 const MAX_RECENTS = 20;
+const MAX_DISMISSED_INVITES = 100;
 
 export interface NuggetAppState {
   version: 1;
   recentWorkspaces: RecentWorkspace[];
   recentDms: RecentDm[];
+  dismissedInviteRoomIds: string[];
   lastOpenedAt?: number;
 }
 
@@ -137,6 +139,39 @@ export async function forgetRecentDm(roomId: string): Promise<void> {
   await saveAppState(nextState);
 }
 
+export async function dismissInviteRoom(roomId: string): Promise<void> {
+  const { state } = await loadAppState();
+  const nextState = dismissInviteRoomFromState(state, roomId);
+
+  if (nextState === state) {
+    return;
+  }
+
+  await saveAppState(nextState);
+}
+
+export function dismissInviteRoomFromState(
+  state: NuggetAppState,
+  roomId: string,
+): NuggetAppState {
+  const target = roomId.trim();
+
+  if (target.length === 0 || state.dismissedInviteRoomIds.includes(target)) {
+    return state;
+  }
+
+  return {
+    ...(state.lastOpenedAt === undefined ? {} : { lastOpenedAt: state.lastOpenedAt }),
+    dismissedInviteRoomIds: normalizeStringIds(
+      [target, ...state.dismissedInviteRoomIds],
+      MAX_DISMISSED_INVITES,
+    ),
+    recentDms: state.recentDms,
+    recentWorkspaces: state.recentWorkspaces,
+    version: state.version,
+  };
+}
+
 export function forgetRecentDmFromState(
   state: NuggetAppState,
   roomId: string,
@@ -149,6 +184,7 @@ export function forgetRecentDmFromState(
 
   return {
     ...(state.lastOpenedAt === undefined ? {} : { lastOpenedAt: state.lastOpenedAt }),
+    dismissedInviteRoomIds: state.dismissedInviteRoomIds,
     recentDms,
     recentWorkspaces: state.recentWorkspaces,
     version: state.version,
@@ -157,6 +193,7 @@ export function forgetRecentDmFromState(
 
 export function emptyAppState(): NuggetAppState {
   return {
+    dismissedInviteRoomIds: [],
     recentDms: [],
     recentWorkspaces: [],
     version: APP_STATE_VERSION,
@@ -172,6 +209,7 @@ export function parseAppState(value: unknown): NuggetAppState | null {
     ...(typeof value.lastOpenedAt === "number" && Number.isFinite(value.lastOpenedAt)
       ? { lastOpenedAt: value.lastOpenedAt }
       : {}),
+    dismissedInviteRoomIds: parseStringIds(value.dismissedInviteRoomIds, MAX_DISMISSED_INVITES),
     recentDms: parseRecentDms(value.recentDms),
     recentWorkspaces: parseRecentWorkspaces(value.recentWorkspaces),
     version: APP_STATE_VERSION,
@@ -181,6 +219,10 @@ export function parseAppState(value: unknown): NuggetAppState | null {
 function normalizeAppState(state: NuggetAppState): NuggetAppState {
   return {
     ...(state.lastOpenedAt === undefined ? {} : { lastOpenedAt: state.lastOpenedAt }),
+    dismissedInviteRoomIds: normalizeStringIds(
+      state.dismissedInviteRoomIds,
+      MAX_DISMISSED_INVITES,
+    ),
     recentDms: normalizeRecents(state.recentDms, (item) => item.roomId),
     recentWorkspaces: normalizeRecents(state.recentWorkspaces, (item) => item.spaceId),
     version: APP_STATE_VERSION,
@@ -211,6 +253,14 @@ function parseRecentWorkspaces(value: unknown): RecentWorkspace[] {
       };
     })
     .filter((item): item is RecentWorkspace => item !== null);
+}
+
+function parseStringIds(value: unknown, maxItems: number): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return normalizeStringIds(value, maxItems);
 }
 
 function parseRecentDms(value: unknown): RecentDm[] {
@@ -274,6 +324,32 @@ function normalizeRecents<T extends { openedAt: number }>(
     normalized.push(item);
 
     if (normalized.length >= MAX_RECENTS) {
+      break;
+    }
+  }
+
+  return normalized;
+}
+
+function normalizeStringIds(items: readonly unknown[], maxItems: number): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const item of items) {
+    if (typeof item !== "string") {
+      continue;
+    }
+
+    const id = item.trim();
+
+    if (id.length === 0 || seen.has(id)) {
+      continue;
+    }
+
+    seen.add(id);
+    normalized.push(id);
+
+    if (normalized.length >= maxItems) {
       break;
     }
   }

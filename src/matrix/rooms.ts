@@ -84,7 +84,7 @@ export async function waitForJoinedRoom(
     const membership = room.getMyMembership() ?? "unknown";
 
     if (membership !== "join") {
-      return { kind: "failed", status: `membership ${membership}` };
+      return { kind: "waiting", status: `membership ${membership}` };
     }
 
     if (isSpaceRoom(room)) {
@@ -105,6 +105,10 @@ export async function waitForJoinedRoom(
   }
 
   if (!(await isJoinedOnServer(client, roomId))) {
+    if (initial.status !== "missing from local sync") {
+      throw joinedRoomWaitError(roomId, initial.status);
+    }
+
     throw new Error(
       `Room ${roomId} is not visible in the local Matrix sync store, and the server does not report this session as joined. Join it first or refresh sync.`,
     );
@@ -191,20 +195,22 @@ export async function getJoinedDirectRooms(
   options: JoinedRoomOptions = {},
 ): Promise<JoinedDirectRoom[]> {
   const directRoomUsers = getDirectRoomUsers(client);
-  const rooms = Array.from(directRoomUsers.entries()).map(([roomId, userIds]) => {
-    const room = client.getRoom(roomId);
+  const rooms = await Promise.all(
+    Array.from(directRoomUsers.entries()).map(async ([roomId, userIds]) => {
+      const room = client.getRoom(roomId);
 
-    if (
-      room &&
-      isJoinedRoom(room) &&
-      !isSpaceRoom(room) &&
-      !options.excludeRoomIds?.has(roomId)
-    ) {
-      return directRoomSummary(room, userIds);
-    }
+      if (
+        room &&
+        !isSpaceRoom(room) &&
+        !options.excludeRoomIds?.has(roomId) &&
+        await isJoinedDirectRoomVisible(client, room)
+      ) {
+        return directRoomSummary(room, userIds);
+      }
 
-    return null;
-  });
+      return null;
+    }),
+  );
 
   return rooms.filter((room): room is JoinedDirectRoom => room !== null).sort(compareRooms);
 }
@@ -241,18 +247,41 @@ export function isJoinedRoom(room: Room): boolean {
   return room.getMyMembership() === "join";
 }
 
+async function isJoinedDirectRoomVisible(client: MatrixClient, room: Room): Promise<boolean> {
+  const localMembership = room.getMyMembership();
+
+  if (localMembership !== "join" && localMembership !== "invite") {
+    return false;
+  }
+
+  const serverMembership = await getOwnMembershipOnServer(client, room.roomId);
+
+  if (serverMembership) {
+    return serverMembership === "join";
+  }
+
+  return localMembership === "join";
+}
+
 async function isJoinedOnServer(client: MatrixClient, roomId: string): Promise<boolean> {
-  const userId = client.getUserId();
+  return (await getOwnMembershipOnServer(client, roomId)) === "join";
+}
+
+async function getOwnMembershipOnServer(
+  client: MatrixClient,
+  roomId: string,
+): Promise<string | null> {
+  const userId = typeof client.getUserId === "function" ? client.getUserId() : null;
 
   if (!userId) {
-    return false;
+    return null;
   }
 
   try {
     const content = await client.getStateEvent(roomId, EventType.RoomMember, userId);
-    return content.membership === "join";
+    return typeof content.membership === "string" ? content.membership : null;
   } catch {
-    return false;
+    return null;
   }
 }
 

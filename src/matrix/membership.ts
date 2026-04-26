@@ -101,6 +101,35 @@ export async function leaveRoom(client: MatrixClient, roomId: string): Promise<v
   }
 }
 
+export async function rejectRoomInvite(client: MatrixClient, roomId: string): Promise<void> {
+  const target = roomId.trim();
+
+  if (!isMatrixRoomId(target)) {
+    throw new Error(`Invalid Matrix room ID: ${roomId}`);
+  }
+
+  const membership = getRoomMembership(client, target);
+
+  if (membership === "missing") {
+    throw new Error(`Invite ${target} is not visible in the synced client store.`);
+  }
+
+  if (membership !== "invite") {
+    throw new Error(
+      `Room ${target} cannot be rejected because current membership is ${membership}.`,
+    );
+  }
+
+  try {
+    await client.leave(target);
+  } catch (error) {
+    throw new Error(`Could not reject invite ${target}: ${formatError(error)}`);
+  }
+
+  await forgetRoomBestEffort(client, target);
+  await waitForRoomMembershipNot(client, target, "invite", 5_000).catch(() => undefined);
+}
+
 export async function removeDirectRoomAccountData(
   client: MatrixClient,
   roomId: string,
@@ -142,6 +171,14 @@ export async function removeDirectRoomAccountData(
   }
 
   await client.setAccountData(EventType.Direct, nextContent);
+}
+
+async function forgetRoomBestEffort(client: MatrixClient, roomId: string): Promise<void> {
+  try {
+    await client.forget(roomId);
+  } catch {
+    // Some homeservers only allow forgetting after the next sync observes the leave.
+  }
 }
 
 export async function inviteToRoom(
