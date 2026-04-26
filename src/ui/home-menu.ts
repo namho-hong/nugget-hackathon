@@ -50,6 +50,7 @@ export interface SelectHomeActionInput {
   accountUserId?: string;
   workspaces: HomeWorkspace[];
   directMessages: HomeDirectMessage[];
+  openDirectRoomIds?: ReadonlySet<string>;
   pendingWorkspaceInvites?: HomePendingWorkspaceInvite[];
   pendingDirectInvites?: HomePendingDirectInvite[];
   warnings?: string[];
@@ -173,7 +174,7 @@ function homeSections(home: SelectHomeActionInput): PickerSection[] {
     home.directMessages.length === 0
       ? [{ label: "No DMs", disabled: true }]
       : home.directMessages.slice(0, 5).map((directMessage) => ({
-          label: directMessage.name,
+          label: directMessageLabel(directMessage, home.openDirectRoomIds ?? new Set()),
           action: { type: "open-dm", roomId: directMessage.roomId } satisfies HomeAction,
         }));
 
@@ -232,6 +233,15 @@ function homeSections(home: SelectHomeActionInput): PickerSection[] {
   }
 
   return sections;
+}
+
+function directMessageLabel(
+  directMessage: HomeDirectMessage,
+  openDirectRoomIds: ReadonlySet<string>,
+): string {
+  return openDirectRoomIds.has(directMessage.roomId)
+    ? `* ${directMessage.name}`
+    : directMessage.name;
 }
 
 function selectPendingDirectInviteAction(

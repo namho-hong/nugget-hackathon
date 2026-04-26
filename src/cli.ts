@@ -36,6 +36,7 @@ import {
   loginWithSso,
   resolveRoomOrThrow,
   waitForJoinedSpace,
+  waitForJoinedRoom,
   waitForRoomMembership,
   withMatrixClient,
   type LoginAction,
@@ -43,8 +44,10 @@ import {
 import {
   CmuxClient,
   WorkspaceController,
+  getOpenDirectRoomIds,
   getRequiredCmuxContext,
   launchWorkspace,
+  openDirectRoomBesideCurrentSurface,
   openThreadBesideCurrentSurface,
 } from "./cmux/index.js";
 import {
@@ -297,6 +300,10 @@ async function selectHomeActionFromMatrix(): Promise<HomeAction> {
       excludeRoomIds: childRooms.roomIds,
     }).filter((invite) => !joinedDirectUserIds.has(invite.inviterUserId));
     const pendingWorkspaceInvites = getPendingSpaceInvites(client);
+    const openDirectRoomIds = await getOpenDirectRoomIds(
+      new Set(directMessages.map((directMessage) => directMessage.roomId)),
+    );
+
     return selectHomeAction({
       accountUserId: session.userId,
       directMessages: rankByRecent(
@@ -305,6 +312,7 @@ async function selectHomeActionFromMatrix(): Promise<HomeAction> {
         (directMessage) => directMessage.roomId,
         (recent) => recent.roomId,
       ),
+      openDirectRoomIds,
       pendingDirectInvites,
       pendingWorkspaceInvites,
       warnings: [...childRooms.warnings, ...localState.warnings],
@@ -358,7 +366,7 @@ async function handleHomeAction(action: HomeAction): Promise<CommandResult> {
   }
 
   if (action.type === "open-dm") {
-    return handleOpenRoom(action.roomId);
+    return handleOpenDirectRoomFromHome(action.roomId);
   }
 
   if (action.type === "accept-dm-invite") {
@@ -515,7 +523,7 @@ async function handleInviteCommand(args: string[]): Promise<CommandResult> {
   }
 
   return withMatrixClient(async (client) => {
-    resolveRoomOrThrow(client, roomId);
+    await waitForJoinedRoom(client, roomId);
     await inviteToRoom(client, roomId, userId);
 
     return {
@@ -552,22 +560,7 @@ async function handleWorkspaceCommand(args: string[]): Promise<CommandResult> {
       return { type: "quit" } as const;
     }
 
-    const workspace = resolveJoinedSpace(client, action.spaceId);
-
-    try {
-      await launchWorkspace(workspace);
-    } catch (error) {
-      throw new Error(
-        `Space ${workspace.roomId} is joined, but Nugget could not open its cmux workspace: ${formatError(error)}`,
-      );
-    }
-
-    await recordRecentWorkspace({
-      name: workspace.name,
-      spaceId: workspace.roomId,
-    });
-
-    return { type: "quit" } as const;
+    return await openWorkspaceFromClient(client, action.spaceId);
   });
 
   return handleNavigationResult(result);
@@ -593,27 +586,7 @@ async function handleWorkspaceControllerCommand(args: string[]): Promise<Command
   );
 
   const result = await withMatrixClient(async (client) => {
-    const space = await waitForJoinedSpace(client, spaceId);
-
-    await controller.hydrateOpenRooms(
-      getJoinedSpaceRooms(client, spaceId).map((room) => room.roomId),
-    );
-    return await runSpaceRoomPicker({
-      loadRooms: () => getSpaceRooms(client, spaceId),
-      onAcceptRoomInvite: async (room) => {
-        await joinRoom(client, room.roomId, { viaServers: room.viaServers });
-      },
-      onInviteUser: async (userId) => {
-        await inviteToRoom(client, spaceId, userId);
-      },
-      onJoinRoom: async (room) => {
-        await joinRoom(client, room.roomId, { viaServers: room.viaServers });
-      },
-      onOpenRoom: (roomId) => controller.openRoom(roomId),
-      title: `Workspace: ${space.name}`,
-      watchRoomActivity: (onActivity) =>
-        watchWorkspaceRoomActivity(client, spaceId, cmux, onActivity),
-    });
+    return await runWorkspacePickerForSpace(client, spaceId, cmux, controller);
   });
 
   return handleNavigationResult(result);
@@ -781,7 +754,7 @@ async function handleThreadCommand(args: string[]): Promise<CommandResult> {
   }
 
   const result = await withMatrixClient(async (client) => {
-    resolveRoomOrThrow(client, roomId);
+    await waitForJoinedRoom(client, roomId);
     return await openThreadView(client, roomId, threadRootEventId);
   });
 
@@ -801,7 +774,7 @@ async function handleSendCommand(args: string[]): Promise<CommandResult> {
   }
 
   return withMatrixClient(async (client) => {
-    resolveRoomOrThrow(client, roomId);
+    await waitForJoinedRoom(client, roomId);
 
     try {
       await client.sendMessage(roomId, {
@@ -822,7 +795,7 @@ async function handleSendCommand(args: string[]): Promise<CommandResult> {
 
 async function handleOpenRoom(roomId: string): Promise<CommandResult> {
   const result = await withMatrixClient(async (client) => {
-    const room = resolveRoomOrThrow(client, roomId);
+    const room = await waitForJoinedRoom(client, roomId);
 
     await recordRecentDmIfJoinedDirect(client, room.roomId);
 
@@ -835,29 +808,143 @@ async function handleOpenRoom(roomId: string): Promise<CommandResult> {
   return handleNavigationResult(result);
 }
 
-async function handleOpenWorkspace(spaceId: string): Promise<CommandResult> {
-  return withMatrixClient(async (client) => {
-    const workspace = await waitForJoinedSpace(client, spaceId);
-
-    try {
-      await launchWorkspace(workspace);
-    } catch (error) {
-      throw new Error(
-        `Space ${workspace.roomId} is joined, but Nugget could not open its cmux workspace: ${formatError(error)}`,
-      );
-    }
-
-    await recordRecentWorkspace({
-      name: workspace.name,
-      spaceId: workspace.roomId,
-    });
-
-    return {
-      exitCode: 0,
-      output: "",
-      stream: "stdout",
-    };
+async function handleOpenDirectRoomFromHome(roomId: string): Promise<CommandResult> {
+  const result = await withMatrixClient(async (client) => {
+    return await openDirectRoomFromClient(client, roomId);
   });
+
+  return handleNavigationResult(result);
+}
+
+async function openDirectRoomFromClient(
+  client: MatrixClient,
+  roomId: string,
+): Promise<{ type: "home" | "quit" }> {
+  const room = await waitForJoinedRoom(client, roomId);
+  const directRooms = await getJoinedDirectRooms(client);
+  const directRoomIds = new Set(directRooms.map((directRoom) => directRoom.roomId));
+  const directRoom = directRooms.find((item) => item.roomId === room.roomId);
+
+  directRoomIds.add(room.roomId);
+
+  if (directRoom) {
+    await recordRecentDm({
+      name: directRoom.name,
+      roomId: directRoom.roomId,
+    });
+  } else {
+    await recordRecentDmIfJoinedDirect(client, room.roomId);
+  }
+
+  if (
+    await openDirectRoomBesideCurrentSurface(room.roomId, {
+      knownDirectRoomIds: directRoomIds,
+    })
+  ) {
+    return { type: "home" };
+  }
+
+  return await openChatView(client, room.roomId, {
+    onOpenThread: (threadRootEventId) =>
+      openThreadBesideCurrentSurface(room.roomId, threadRootEventId),
+  });
+}
+
+async function handleOpenWorkspace(spaceId: string): Promise<CommandResult> {
+  const result = await withMatrixClient(async (client) => {
+    return await openWorkspaceFromClient(client, spaceId);
+  });
+
+  return handleNavigationResult(result);
+}
+
+async function openWorkspaceFromClient(
+  client: MatrixClient,
+  spaceId: string,
+): Promise<{ type: "home" | "quit" }> {
+  const workspace = await waitForJoinedSpace(client, spaceId);
+
+  await recordRecentWorkspace({
+    name: workspace.name,
+    spaceId: workspace.roomId,
+  });
+
+  const inlineContext = await getCurrentCmuxContext();
+
+  if (inlineContext) {
+    await launchWorkspace(workspace);
+
+    const cmux = new CmuxClient();
+    const controller = new WorkspaceController(
+      cmux,
+      inlineContext.workspaceRef,
+      inlineContext.surfaceRef,
+    );
+
+    return await runWorkspacePickerForSpace(client, workspace.roomId, cmux, controller);
+  }
+
+  try {
+    await launchWorkspace(workspace);
+  } catch (error) {
+    throw new Error(
+      `Space ${workspace.roomId} is joined, but Nugget could not open its cmux workspace: ${formatError(error)}`,
+    );
+  }
+
+  return { type: "quit" };
+}
+
+async function runWorkspacePickerForSpace(
+  client: MatrixClient,
+  spaceId: string,
+  cmux: CmuxClient,
+  controller: WorkspaceController,
+): Promise<{ type: "home" | "quit" }> {
+  const space = await waitForJoinedSpace(client, spaceId);
+
+  await controller.hydrateOpenRooms(
+    getJoinedSpaceRooms(client, spaceId).map((room) => room.roomId),
+  );
+
+  return await runSpaceRoomPicker({
+    loadRooms: () => getSpaceRooms(client, spaceId),
+    onAcceptRoomInvite: async (room) => {
+      await joinRoom(client, room.roomId, { viaServers: room.viaServers });
+    },
+    onInviteUser: async (userId) => {
+      await inviteToRoom(client, spaceId, userId);
+    },
+    onJoinRoom: async (room) => {
+      await joinRoom(client, room.roomId, { viaServers: room.viaServers });
+    },
+    onOpenRoom: (roomId) => controller.openRoom(roomId),
+    title: `Workspace: ${space.name}`,
+    watchRoomActivity: (onActivity) =>
+      watchWorkspaceRoomActivity(client, spaceId, cmux, onActivity),
+  });
+}
+
+async function getCurrentCmuxContext(): Promise<{
+  surfaceRef: string;
+  workspaceRef: string;
+} | null> {
+  const cmux = new CmuxClient();
+  const tree = await cmux.tree({ all: true, preserveCallerEnv: true });
+  const surfaceRef =
+    process.env.CMUX_SURFACE_ID ??
+    tree.caller?.surface_ref ??
+    tree.active?.surface_ref;
+  const currentWorkspaceRef =
+    process.env.CMUX_WORKSPACE_ID ??
+    tree.caller?.workspace_ref ??
+    tree.active?.workspace_ref;
+
+  if (!surfaceRef || !currentWorkspaceRef) {
+    return null;
+  }
+
+  return { surfaceRef, workspaceRef: currentWorkspaceRef };
 }
 
 function resolveJoinedSpace(
@@ -957,10 +1044,7 @@ async function handleCreateDm(userId: string): Promise<CommandResult> {
     await recordRecentDm({ name: created.name, roomId: created.roomId });
 
     try {
-      return await openChatView(client, created.roomId, {
-        onOpenThread: (threadRootEventId) =>
-          openThreadBesideCurrentSurface(created.roomId, threadRootEventId),
-      });
+      return await openDirectRoomFromClient(client, created.roomId);
     } catch (error) {
       throw new Error(
         `Created DM room ${created.roomId} for ${userId}, but could not open chat: ${formatError(error)}`,
@@ -1035,10 +1119,7 @@ async function handleAcceptDmInvite(roomId: string): Promise<CommandResult> {
     });
 
     try {
-      return await openChatView(client, joinedRoom.roomId, {
-        onOpenThread: (threadRootEventId) =>
-          openThreadBesideCurrentSurface(joinedRoom.roomId, threadRootEventId),
-      });
+      return await openDirectRoomFromClient(client, joinedRoom.roomId);
     } catch (error) {
       throw new Error(
         `Accepted DM invite and joined ${joinedRoom.roomId}, but could not open chat: ${formatError(error)}`,

@@ -1,7 +1,10 @@
 import {
+  ClientEvent,
   EventType,
   RoomCreateTypeField,
+  RoomEvent,
   RoomType,
+  SyncState,
   type MatrixClient,
 } from "matrix-js-sdk";
 import type { Room } from "matrix-js-sdk";
@@ -61,6 +64,128 @@ export function resolveRoomOrThrow(client: MatrixClient, roomId: string): Room {
   return room;
 }
 
+export async function waitForJoinedRoom(
+  client: MatrixClient,
+  roomId: string,
+  timeoutMs = 30_000,
+): Promise<Room> {
+  type JoinedRoomWaitState =
+    | { kind: "ready"; room: Room; status: string }
+    | { kind: "waiting"; status: string }
+    | { kind: "failed"; status: string };
+
+  const currentRoom = (): JoinedRoomWaitState => {
+    const room = client.getRoom(roomId);
+
+    if (!room) {
+      return { kind: "waiting", status: "missing from local sync" };
+    }
+
+    const membership = room.getMyMembership() ?? "unknown";
+
+    if (membership !== "join") {
+      return { kind: "failed", status: `membership ${membership}` };
+    }
+
+    if (isSpaceRoom(room)) {
+      return { kind: "failed", status: "Matrix Space" };
+    }
+
+    return { kind: "ready", room, status: "ready" };
+  };
+
+  const initial = currentRoom();
+
+  if (initial.kind === "ready") {
+    return initial.room;
+  }
+
+  if (initial.kind === "failed") {
+    throw joinedRoomWaitError(roomId, initial.status);
+  }
+
+  if (!(await isJoinedOnServer(client, roomId))) {
+    throw new Error(
+      `Room ${roomId} is not visible in the local Matrix sync store, and the server does not report this session as joined. Join it first or refresh sync.`,
+    );
+  }
+
+  return await new Promise<Room>((resolve, reject) => {
+    let lastStatus = initial.status;
+    let lastState = client.getSyncState() ?? "none";
+    let lastError: Error | undefined;
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(
+        new Error(
+          `Room ${roomId} is joined on the server, but did not appear in local Matrix sync after ${Math.round(
+            timeoutMs / 1000,
+          )}s. Last status: ${lastStatus}; last sync state: ${lastState}${
+            lastError ? ` (${lastError.message})` : ""
+          }.`,
+        ),
+      );
+    }, timeoutMs);
+
+    timeout.unref();
+
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      client.off(ClientEvent.Room, onRoom);
+      client.off(ClientEvent.Sync, onSync);
+      client.off(RoomEvent.MyMembership, onMembership);
+    };
+
+    const check = (): void => {
+      const next = currentRoom();
+      lastStatus = next.status;
+
+      if (next.kind === "ready") {
+        cleanup();
+        resolve(next.room);
+        return;
+      }
+
+      if (next.kind === "failed") {
+        cleanup();
+        reject(joinedRoomWaitError(roomId, next.status));
+      }
+    };
+
+    const onRoom = (room: { roomId: string }): void => {
+      if (room.roomId !== roomId) {
+        return;
+      }
+
+      check();
+    };
+
+    const onSync = (
+      state: SyncState,
+      _previousState: SyncState | null,
+      data?: { error?: Error },
+    ): void => {
+      lastState = state;
+      lastError = data?.error;
+      check();
+    };
+
+    const onMembership = (room: Room, nextMembership: string): void => {
+      if (room.roomId !== roomId) {
+        return;
+      }
+
+      lastStatus = `membership ${nextMembership}`;
+      check();
+    };
+
+    client.on(ClientEvent.Room, onRoom);
+    client.on(ClientEvent.Sync, onSync);
+    client.on(RoomEvent.MyMembership, onMembership);
+    check();
+  });
+}
+
 export async function getJoinedDirectRooms(
   client: MatrixClient,
   options: JoinedRoomOptions = {},
@@ -114,6 +239,29 @@ export function findJoinedDirectRoomForUser(
 
 export function isJoinedRoom(room: Room): boolean {
   return room.getMyMembership() === "join";
+}
+
+async function isJoinedOnServer(client: MatrixClient, roomId: string): Promise<boolean> {
+  const userId = client.getUserId();
+
+  if (!userId) {
+    return false;
+  }
+
+  try {
+    const content = await client.getStateEvent(roomId, EventType.RoomMember, userId);
+    return content.membership === "join";
+  } catch {
+    return false;
+  }
+}
+
+function joinedRoomWaitError(roomId: string, status: string): Error {
+  if (status === "Matrix Space") {
+    return new Error(`Room ${roomId} is a Matrix Space, not a chat room.`);
+  }
+
+  return new Error(`Room ${roomId} is not joined by the current Matrix session (${status}).`);
 }
 
 export function getPendingDirectRoomInvites(

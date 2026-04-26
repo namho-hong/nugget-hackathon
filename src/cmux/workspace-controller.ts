@@ -159,117 +159,20 @@ export class WorkspaceController {
 
 export async function launchWorkspace(workspace: MatrixWorkspace): Promise<void> {
   const cmux = new CmuxClient();
-  const description = workspaceDescription(workspace.roomId);
-  let tree = await cmux.tree({ all: true, preserveCallerEnv: true });
-  const initialContext = getCurrentCmuxContext(tree);
-  let cmuxWorkspace = findNuggetWorkspace(tree, workspace.roomId, workspace.name);
+  const tree = await cmux.tree({ all: true, preserveCallerEnv: true });
+  const workspaceRef =
+    process.env.CMUX_WORKSPACE_ID ??
+    tree.caller?.workspace_ref ??
+    tree.active?.workspace_ref;
 
-  if (!cmuxWorkspace) {
-    await cmux.newWorkspace({
-      cwd: process.cwd(),
-      description,
-      title: workspaceTitle(workspace.name),
-    });
-    tree = await cmux.tree({ all: true });
-    cmuxWorkspace = findNuggetWorkspace(tree, workspace.roomId, workspace.name);
+  if (!workspaceRef) {
+    return;
   }
 
-  if (!cmuxWorkspace) {
-    throw new Error(`Could not create or find cmux workspace for ${workspace.name}.`);
-  }
-
-  cmuxWorkspace = await repairWorkspaceTitle(cmux, cmuxWorkspace, workspace);
-
-  const controllerSurface = await ensureWorkspaceController(
-    cmux,
-    cmuxWorkspace,
-    workspace.roomId,
-    {
-      avoidSurfaceRef:
-        initialContext.workspaceRef === cmuxWorkspace.ref
-          ? initialContext.surfaceRef
-          : undefined,
-    },
-  );
-
-  if (!isWorkspaceSelected(tree, cmuxWorkspace.ref)) {
-    await cmux.selectWorkspace(cmuxWorkspace.ref);
-  }
-
-  await tryFocusPaneSurface(cmux, cmuxWorkspace.ref, controllerSurface);
-}
-
-async function repairWorkspaceTitle(
-  cmux: CmuxClient,
-  workspace: CmuxWorkspace,
-  matrixWorkspace: MatrixWorkspace,
-): Promise<CmuxWorkspace> {
-  const title = workspaceTitle(matrixWorkspace.name);
-
-  if (workspace.title === title) {
-    return workspace;
-  }
-
-  if (workspace.description !== workspaceDescription(matrixWorkspace.roomId)) {
-    return workspace;
-  }
-
-  try {
-    await cmux.renameWorkspace({
-      title,
-      workspaceRef: workspace.ref,
-    });
-    return findWorkspace(await cmux.tree({ all: true }), workspace.ref) ?? workspace;
-  } catch {
-    return workspace;
-  }
-}
-
-function getCurrentCmuxContext(tree: CmuxTree): {
-  surfaceRef: string | undefined;
-  workspaceRef: string | undefined;
-} {
-  return {
-    surfaceRef:
-      process.env.CMUX_SURFACE_ID ??
-      tree.caller?.surface_ref ??
-      tree.active?.surface_ref,
-    workspaceRef:
-      process.env.CMUX_WORKSPACE_ID ??
-      tree.caller?.workspace_ref ??
-      tree.active?.workspace_ref,
-  };
-}
-
-function isWorkspaceSelected(tree: CmuxTree, workspaceRef: string): boolean {
-  const workspace = findWorkspace(tree, workspaceRef);
-
-  return (
-    workspace?.selected === true ||
-    workspace?.active === true ||
-    tree.active?.workspace_ref === workspaceRef ||
-    tree.caller?.workspace_ref === workspaceRef
-  );
-}
-
-async function tryFocusPaneSurface(
-  cmux: CmuxClient,
-  workspaceRef: string,
-  target: CmuxPaneSurfaceRef,
-): Promise<boolean> {
-  try {
-    await cmux.focusPane({
-      paneRef: target.paneRef,
-      workspaceRef,
-    });
-    await cmux.focusSurface({
-      surfaceRef: target.surfaceRef,
-      workspaceRef,
-    });
-    return true;
-  } catch {
-    return false;
-  }
+  await cmux.renameWorkspace({
+    title: workspaceTitle(workspace.name),
+    workspaceRef,
+  });
 }
 
 export function getRequiredCmuxContext(): CmuxPaneSurfaceRef & { workspaceRef: string } {
@@ -334,88 +237,6 @@ export function workspaceScore(workspace: CmuxWorkspace, spaceId: string): numbe
   return score;
 }
 
-async function ensureWorkspaceController(
-  cmux: CmuxClient,
-  workspace: CmuxWorkspace,
-  spaceId: string,
-  options: { avoidSurfaceRef?: string | undefined } = {},
-): Promise<CmuxPaneSurfaceRef> {
-  const existing = findWorkspaceControllerSurface(workspace, spaceId);
-  const targetSurface = existing ?? (await createPickerSurface(cmux, workspace, options));
-
-  if (!targetSurface) {
-    throw new Error(`cmux workspace ${workspace.ref} has no surface for the workspace picker.`);
-  }
-
-  let paneRef = findSurfacePane(workspace, targetSurface.ref)?.paneRef;
-
-  if (!paneRef) {
-    const refreshedWorkspace = findWorkspace(
-      await cmux.tree({ all: true }),
-      workspace.ref,
-    );
-    paneRef = refreshedWorkspace
-      ? findSurfacePane(refreshedWorkspace, targetSurface.ref)?.paneRef
-      : undefined;
-  }
-
-  if (!paneRef) {
-    throw new Error(`cmux surface ${targetSurface.ref} has no containing pane.`);
-  }
-
-  if (
-    existing &&
-    (await isWorkspacePickerVisible(cmux, workspace.ref, targetSurface.ref))
-  ) {
-    return { paneRef, surfaceRef: targetSurface.ref };
-  }
-
-  const command =
-    `CMUX_WORKSPACE_ID=${shellQuote(workspace.ref)} ` +
-    `CMUX_SURFACE_ID=${shellQuote(targetSurface.ref)} ` +
-    "NUGGET_IGNORE_INITIAL_ENTER=1 " +
-    `${shellQuote(defaultNuggetCommand())} workspace-controller ${shellQuote(spaceId)}`;
-
-  await cmux.respawnPane({
-    command,
-    surfaceRef: targetSurface.ref,
-    workspaceRef: workspace.ref,
-  });
-
-  return { paneRef, surfaceRef: targetSurface.ref };
-}
-
-async function createPickerSurface(
-  cmux: CmuxClient,
-  workspace: CmuxWorkspace,
-  options: { avoidSurfaceRef?: string | undefined } = {},
-): Promise<{ ref: string; type?: string | null } | null> {
-  const firstSurface = firstTerminalSurface(workspace);
-
-  if (!firstSurface) {
-    return null;
-  }
-
-  if (
-    firstSurface.ref !== options.avoidSurfaceRef &&
-    !hasNuggetRoomSurface(workspace) &&
-    !findWorkspaceControllerSurface(workspace)
-  ) {
-    return firstSurface;
-  }
-
-  const split = await cmux.newSplit("left", {
-    surfaceRef: firstSurface.ref,
-    workspaceRef: workspace.ref,
-  });
-
-  return { ref: split.surfaceRef };
-}
-
-function firstTerminalSurface(workspace: CmuxWorkspace) {
-  return getWorkspaceSurfaces(workspace).find((surface) => surface.type !== "browser");
-}
-
 function requiredWorkspace(tree: CmuxTree, workspaceRef: string): CmuxWorkspace {
   const workspace = findWorkspace(tree, workspaceRef);
 
@@ -447,19 +268,6 @@ function hasNuggetRoomSurface(workspace: CmuxWorkspace): boolean {
     const title = surface.title ?? "";
     return title.includes("nugget") && /\broom\b/.test(title);
   });
-}
-
-async function isWorkspacePickerVisible(
-  cmux: CmuxClient,
-  workspaceRef: string,
-  surfaceRef: string,
-): Promise<boolean> {
-  try {
-    const screen = await cmux.readScreen({ workspaceRef, surfaceRef, lines: 24 });
-    return screen.includes("Workspace:") && screen.includes("Enter opens");
-  } catch {
-    return false;
-  }
 }
 
 export function shouldReuseRoomSurface(

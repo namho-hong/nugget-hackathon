@@ -620,8 +620,9 @@ Current status:
 
 ## Follow-up: Active Workspace Reentry
 
-Goal: Selecting a Nugget workspace that is already the active cmux workspace
-should not respawn the terminal surface currently running the CLI.
+Goal: Selecting a Nugget workspace should keep the current terminal surface,
+rename the current cmux workspace, and show the workspace picker inline without
+creating a new cmux workspace, pane, or terminal.
 
 Definition of Done:
 
@@ -629,6 +630,12 @@ Definition of Done:
 - [x] Initial cmux tree lookup preserves caller env for accurate reentry
   detection.
 - [x] Picker surface creation avoids reusing the current CLI surface.
+- [x] Existing controller-surface reuse avoids respawning stale controller
+  surfaces unless the picker is visibly running.
+- [x] Selecting the current cmux workspace runs the workspace picker inline
+  instead of creating another split and leaving the Home surface at a shell.
+- [x] Workspace open no longer creates cmux workspaces, creates picker splits,
+  or respawns a separate workspace-controller pane.
 - [x] Already-selected cmux workspaces skip redundant `select-workspace`.
 - [x] Picker focus is best-effort after controller startup.
 - [x] `pnpm build` passes.
@@ -659,10 +666,14 @@ Manual verification requiring Matrix account and cmux:
 
 Current status:
 
-- Code path updated in `src/cmux/workspace-controller.ts`.
+- Code path updated in `src/cli.ts` and `src/cmux/workspace-controller.ts`.
 - Initial `cmux tree --json --all` now preserves caller env so active
   workspace reentry can identify the launching surface before later cmux control
   commands clear caller-only env vars.
+- Home/workspace selection now switches to the workspace picker in the current
+  process when the selected Space already matches the current cmux workspace.
+- Workspace open now renames the current cmux workspace to `nugget: <workspace>`
+  and does not create a new cmux workspace or picker pane.
 - `pnpm build` passes.
 - `git diff --check` passes.
 - Manual live Matrix/cmux reentry verification still requires selecting a real
@@ -718,6 +729,70 @@ Current status:
 - Diff reviewed. This follow-up changed `src/cli.ts`, `src/matrix/spaces.ts`,
   and `TASKS.md`; `src/cmux/workspace-controller.ts` was already dirty before
   this follow-up.
+
+## Follow-up: DM Pane Opening
+
+Goal: Opening or accepting a DM from the home TUI should keep the home menu in
+the current/left pane and open the DM chat in a right-side cmux pane, reusing an
+existing DM pane with new surfaces when available.
+
+Definition of Done:
+
+- [x] Home-opened joined DMs launch in a cmux room surface outside the current
+  menu pane when cmux context is available.
+- [x] Accepted DM invites launch the joined room outside the current menu pane
+  when cmux context is available.
+- [x] Newly created DMs use the same cmux launch behavior.
+- [x] If a DM pane already exists, additional DMs open as new surfaces in that
+  pane instead of creating another split.
+- [x] Home DM labels mark DMs already open in the current cmux workspace.
+- [x] Non-cmux usage still opens the chat view inline.
+- [x] `pnpm build` passes.
+- [x] Working diff is reviewed for unrelated edits.
+
+Checklist:
+
+- [x] Inspect current DM open/create/accept flows.
+- [x] Inspect cmux split/surface helpers and workspace room behavior.
+- [x] Add a narrow cmux helper for opening DM rooms beside the current surface.
+- [x] Wire home DM open/create/accept flows to use the helper with inline
+  fallback outside cmux.
+- [x] Add home-menu open-DM marker support.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+Verification Commands:
+
+```sh
+pnpm build
+git diff --check
+```
+
+Manual verification requiring cmux and Matrix account:
+
+```sh
+./nugget
+# Open a DM from Home; confirm the Home menu remains in the original pane and
+# the DM opens in a right pane.
+# Open another DM; confirm it appears as a new surface in the existing DM pane.
+# Confirm already-open DMs are marked in the Home DM list.
+```
+
+Current status:
+
+- Added cmux DM room launching via `openDirectRoomBesideCurrentSurface`.
+- Home open, DM invite accept, and new DM creation now use that launcher when a
+  cmux context is present, then return to Home in the original surface.
+- Existing DM panes are reused with `cmux new-surface`; first opens create a
+  right split.
+- Home DM labels now mark open DMs with `*`.
+- `pnpm build` passes.
+- `git diff --check` passes.
+- Diff reviewed. This follow-up changed `src/cmux/dm-controller.ts`,
+  `src/cmux/index.ts`, `src/ui/home-menu.ts`, part of `src/cli.ts`, and this
+  section of `TASKS.md`; other dirty hunks in `src/cli.ts`, `src/matrix/rooms.ts`,
+  `src/cmux/workspace-controller.ts`, and earlier `TASKS.md` sections were
+  already present or unrelated.
 
 ## Follow-up: Workspace Invite Name Preservation
 
@@ -847,3 +922,62 @@ state reset checks do not touch the user's real Matrix session files.
 Manual live Matrix/cmux/agent verification remains separate because automated
 tests intentionally do not require credentials, cmux, browser SSO, or agent
 CLIs.
+
+# Joined Room Reopen Sync Gap
+
+Goal: Make `nugget room <roomId>` reopen a room that was already joined from a
+workspace, even when a new CLI process starts before the room is visible in the
+local Matrix sync store.
+
+Definition of Done:
+
+- [x] Direct room open waits for an already-joined room to become visible in
+  local sync before opening chat.
+- [x] Thread, send, and invite direct room-id flows use the same joined-room
+  visibility check where appropriate.
+- [x] Missing/not-joined rooms still produce actionable errors.
+- [x] `pnpm build` passes.
+- [x] Working diff is reviewed for accidental unrelated edits.
+
+Checklist:
+
+- [x] Inspect `room` command and Matrix room resolution flow.
+- [x] Confirm existing workspace/cmux changes in the worktree are unrelated and
+  should be preserved.
+- [x] Add async joined-room resolution helper.
+- [x] Wire direct room-id commands through the helper.
+- [x] Run verification commands.
+- [x] Review working diff.
+
+Verification Commands:
+
+```sh
+pnpm build
+git diff --check
+```
+
+Manual verification requiring Matrix account and cmux:
+
+```sh
+CMUX_WORKSPACE_ID='workspace:6' CMUX_SURFACE_ID='surface:17' ./nugget room '<joined-room-id>'
+```
+
+Current status:
+
+Implemented `waitForJoinedRoom`, which verifies server-side membership when a
+room is missing from local sync, then waits for the room to arrive before
+opening. `room`, `thread`, `send`, and `invite` now use that async joined-room
+check before operating on direct room IDs.
+
+Verification run:
+
+- `pnpm build`
+- `pnpm test`
+- `git diff --check`
+
+Diff review notes:
+
+- This fix intentionally changes `src/matrix/rooms.ts`, direct room-id command
+  call sites in `src/cli.ts`, and this `TASKS.md` section.
+- Existing in-progress cmux/DM changes in `src/cli.ts`, `src/cmux/*`, and
+  `src/ui/home-menu.ts` are preserved.
