@@ -8,6 +8,7 @@ import {
   type CmuxPane,
   type CmuxPaneSurfaceRef,
   type CmuxSurface,
+  type CmuxTree,
   type CmuxWorkspace,
 } from "./client.js";
 
@@ -226,26 +227,56 @@ async function focusPaneSurface(
   });
 }
 
-function currentCmuxContext(tree: {
-  active?: { workspace_ref?: string; pane_ref?: string; surface_ref?: string };
-  caller?: { workspace_ref?: string; pane_ref?: string; surface_ref?: string };
-}): { workspaceRef: string; paneRef: string | null; surfaceRef: string } | null {
-  const workspaceRef =
-    process.env.CMUX_WORKSPACE_ID ??
-    tree.caller?.workspace_ref ??
-    tree.active?.workspace_ref;
-  const surfaceRef =
-    process.env.CMUX_SURFACE_ID ??
-    tree.caller?.surface_ref ??
-    tree.active?.surface_ref;
-  const paneRef =
-    process.env.CMUX_PANE_ID ?? tree.caller?.pane_ref ?? tree.active?.pane_ref ?? null;
+function currentCmuxContext(
+  tree: CmuxTree,
+): { workspaceRef: string; paneRef: string | null; surfaceRef: string } | null {
+  const candidates = [
+    tree.caller
+      ? {
+          paneRef: tree.caller.pane_ref ?? null,
+          surfaceRef: tree.caller.surface_ref,
+          workspaceRef: tree.caller.workspace_ref,
+        }
+      : null,
+    tree.active
+      ? {
+          paneRef: tree.active.pane_ref ?? null,
+          surfaceRef: tree.active.surface_ref,
+          workspaceRef: tree.active.workspace_ref,
+        }
+      : null,
+    {
+      paneRef: process.env.CMUX_PANE_ID ?? null,
+      surfaceRef: process.env.CMUX_SURFACE_ID,
+      workspaceRef: process.env.CMUX_WORKSPACE_ID,
+    },
+  ];
 
-  if (!workspaceRef || !surfaceRef) {
-    return null;
+  for (const candidate of candidates) {
+    if (!candidate?.workspaceRef || !candidate.surfaceRef) {
+      continue;
+    }
+
+    const workspace = findWorkspace(tree, candidate.workspaceRef);
+
+    if (!workspace) {
+      continue;
+    }
+
+    const pane = findSurfacePane(workspace, candidate.surfaceRef);
+
+    if (!pane) {
+      continue;
+    }
+
+    return {
+      paneRef: pane.paneRef,
+      surfaceRef: pane.surfaceRef,
+      workspaceRef: candidate.workspaceRef,
+    };
   }
 
-  return { paneRef, surfaceRef, workspaceRef };
+  return null;
 }
 
 function defaultNuggetCommand(): string {
