@@ -126,7 +126,7 @@ export async function recordRecentDm(dm: {
   });
 }
 
-function emptyAppState(): NuggetAppState {
+export function emptyAppState(): NuggetAppState {
   return {
     recentDms: [],
     recentWorkspaces: [],
@@ -134,7 +134,7 @@ function emptyAppState(): NuggetAppState {
   };
 }
 
-function parseAppState(value: unknown): NuggetAppState | null {
+export function parseAppState(value: unknown): NuggetAppState | null {
   if (!isRecord(value) || value.version !== APP_STATE_VERSION) {
     return null;
   }

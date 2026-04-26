@@ -617,3 +617,165 @@ Current status:
   `src/matrix/spaces.ts`, `src/ui/home-menu.ts`, and
   `src/ui/space-room-picker.ts`; other dirty files are pre-existing thread and
   cmux work from the current worktree.
+
+## Follow-up: Active Workspace Reentry
+
+Goal: Selecting a Nugget workspace that is already the active cmux workspace
+should not respawn the terminal surface currently running the CLI.
+
+Definition of Done:
+
+- [x] Current cmux workspace/surface context is detected before launching.
+- [x] Picker surface creation avoids reusing the current CLI surface.
+- [x] Already-selected cmux workspaces skip redundant `select-workspace`.
+- [x] Picker focus is best-effort after controller startup.
+- [x] `pnpm build` passes.
+- [x] `git diff --check` passes.
+- [x] Working diff is reviewed for unrelated edits.
+
+Checklist:
+
+- [x] Inspect current workspace launch and cmux client flow.
+- [x] Compare with `/Users/dan/nugget` workspace launch behavior.
+- [x] Implement active workspace reentry guard.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+Verification Commands:
+
+```sh
+pnpm build
+git diff --check
+```
+
+Manual verification requiring Matrix account and cmux:
+
+```sh
+./nugget workspace "<joined-space-id>"
+# Run once from another workspace, then again while that cmux workspace is active.
+```
+
+Current status:
+
+- Code path updated in `src/cmux/workspace-controller.ts`.
+- `pnpm build` passes.
+- `git diff --check` passes.
+- Manual live Matrix/cmux reentry verification still requires selecting a real
+  joined Space from inside its active cmux workspace.
+
+## Follow-up: Workspace Invite Name Preservation
+
+Goal: Accepting or opening an invited Matrix Space should preserve the explicit
+workspace name in Nugget and cmux instead of creating cmux workspaces from
+Matrix SDK member-name fallbacks.
+
+Definition of Done:
+
+- [x] Space summaries prefer explicit `m.room.name` state over SDK fallback
+  display names.
+- [x] Workspace invite accept uses the invite's explicit name if join sync has
+  not yet populated the joined room name.
+- [x] cmux workspace launch updates legacy or fallback Nugget workspace titles
+  to the explicit workspace name when possible.
+- [x] `pnpm build` passes.
+- [x] `git diff --check` passes.
+- [x] Working diff is reviewed for unrelated edits.
+
+Checklist:
+
+- [x] Inspect Matrix Space summary and invite accept paths.
+- [x] Inspect cmux workspace creation/reuse logic.
+- [x] Add explicit Space name resolution.
+- [x] Use explicit Space names in home/open/accept flows.
+- [x] Add cmux workspace title repair support.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+Verification Commands:
+
+```sh
+pnpm build
+git diff --check
+```
+
+Manual verification requiring Matrix account and cmux:
+
+```sh
+./nugget
+# Accept a pending workspace invite.
+# Confirm cmux shows "nugget: <actual workspace name>".
+```
+
+Current Status:
+
+Investigation found that Space paths use `getRoomDisplayName()` / `room.name`,
+which can fall back to member-derived Matrix SDK names during invite/join sync.
+Patch is complete with local verification:
+
+- `pnpm build`
+- `git diff --check`
+
+Manual live Matrix/cmux verification still requires accepting a real pending
+workspace invite.
+
+# Tests And Verification Harness
+
+Goal: Implement `docs/tests-verification-plan.md` so Nugget has
+credential-free tests and smoke checks for parser, Matrix event, cmux tree,
+session/app-state, and terminal formatting behavior.
+
+Definition of Done:
+
+- [ ] `pnpm test` runs credential-free tests.
+- [ ] `pnpm build` passes.
+- [ ] `pnpm smoke` runs credential-free smoke checks.
+- [ ] Agent mention parser has unit coverage.
+- [ ] Slash parser has coverage for implemented commands and `/ask` syntax.
+- [ ] Matrix thread/relation helper behavior has fixture coverage.
+- [ ] Room/Space/DM classification has coverage where pure enough.
+- [ ] cmux tree parser and stale surface decision helpers have coverage.
+- [ ] Session/app-state validation has malformed and missing-field coverage.
+- [ ] Terminal sanitization/width helpers have coverage.
+- [ ] Manual verification docs separate no-credential, Matrix, cmux, and agent
+  checks.
+- [ ] Tests do not require Matrix credentials, cmux, browser SSO, or agent CLIs.
+- [ ] Working diff is reviewed for accidental unrelated edits.
+
+Checklist:
+
+- [x] Read `docs/tests-verification-plan.md`.
+- [x] Inspect existing parser, Matrix, cmux, store, terminal, and smoke code.
+- [ ] Choose test runner and add scripts.
+- [ ] Add fixtures directory.
+- [ ] Add or extract pure parser helpers.
+- [ ] Add agent mention parser tests.
+- [ ] Add slash parser tests.
+- [ ] Add Matrix event/thread helper tests.
+- [ ] Add room/Space/DM classification tests where practical.
+- [ ] Add cmux tree parser/stale decision tests.
+- [ ] Add session/app-state validation tests.
+- [ ] Add terminal formatting/sanitization tests.
+- [ ] Update manual verification docs.
+- [ ] Run verification commands.
+- [ ] Review working diff for accidental unrelated edits.
+
+Verification Commands:
+
+```sh
+pnpm build
+pnpm test
+pnpm smoke
+git diff --check
+```
+
+Manual verification requiring Matrix account, cmux, or agent CLIs:
+
+```sh
+./nugget login
+./nugget
+./nugget workspace "<joined-space-id>"
+```
+
+Current status:
+
+- Implementation in progress.

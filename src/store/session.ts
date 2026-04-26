@@ -24,7 +24,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseSession(value: unknown): MatrixSession | null {
+export function parseSession(value: unknown): MatrixSession | null {
   if (!isRecord(value)) {
     return null;
   }

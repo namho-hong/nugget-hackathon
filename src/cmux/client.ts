@@ -75,13 +75,7 @@ export class CmuxClient {
 
   async tree(options: { all?: boolean } = {}): Promise<CmuxTree> {
     const output = await this.run(["tree", "--json", ...(options.all ? ["--all"] : [])]);
-    const parsed = JSON.parse(output) as unknown;
-
-    if (!isRecord(parsed)) {
-      throw new Error("cmux tree returned non-object JSON.");
-    }
-
-    return parsed as CmuxTree;
+    return parseCmuxTreeJson(output);
   }
 
   async newWorkspace(options: {
@@ -97,6 +91,15 @@ export class CmuxClient {
       options.description,
       "--cwd",
       options.cwd,
+    ]);
+  }
+
+  async renameWorkspace(options: { workspaceRef: string; title: string }): Promise<void> {
+    await this.run([
+      "rename-workspace",
+      "--workspace",
+      options.workspaceRef,
+      options.title,
     ]);
   }
 
@@ -311,6 +314,16 @@ function sanitizeNotificationText(value: string, maxLength: number): string {
 
 export function getWorkspaces(tree: CmuxTree): CmuxWorkspace[] {
   return (tree.windows ?? []).flatMap((window) => window.workspaces ?? []);
+}
+
+export function parseCmuxTreeJson(output: string): CmuxTree {
+  const parsed = JSON.parse(output) as unknown;
+
+  if (!isRecord(parsed)) {
+    throw new Error("cmux tree returned non-object JSON.");
+  }
+
+  return parsed as CmuxTree;
 }
 
 export function getWorkspaceSurfaces(workspace: CmuxWorkspace): CmuxSurface[] {

@@ -24,7 +24,9 @@ import {
   getRoomDisplayName,
   getPendingDirectRoomInvites,
   getJoinedSpaces,
+  getSpaceDisplayName,
   getPendingSpaceInvites,
+  getSpaceStateName,
   getSpaceChildRoomIds,
   getSpaceRooms,
   inviteToRoom,
@@ -870,7 +872,7 @@ function resolveJoinedSpace(
   getJoinedSpaceRooms(client, spaceId);
 
   return {
-    name: getRoomDisplayName(space),
+    name: getSpaceDisplayName(space),
     roomId: space.roomId,
   };
 }
@@ -1057,8 +1059,9 @@ async function handleAcceptWorkspaceInvite(spaceId: string): Promise<CommandResu
     const joinedSpace = await client.joinRoom(spaceId);
     await waitForRoomMembership(client, joinedSpace.roomId, "join");
     const syncedSpace = client.getRoom(joinedSpace.roomId) ?? joinedSpace;
+    const stateName = await getSpaceStateName(client, syncedSpace.roomId);
     const workspace = {
-      name: getRoomDisplayName(syncedSpace),
+      name: stateName ?? getSpaceDisplayName(syncedSpace, invite.name),
       roomId: syncedSpace.roomId,
     };
 

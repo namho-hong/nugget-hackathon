@@ -32,12 +32,45 @@ export interface SpaceChildRoomResult {
   warnings: string[];
 }
 
+export function getSpaceDisplayName(room: Room, fallbackName?: string): string {
+  const explicitName = getExplicitRoomName(room);
+
+  if (explicitName) {
+    return explicitName;
+  }
+
+  const fallback = fallbackName?.trim();
+
+  if (fallback) {
+    return fallback;
+  }
+
+  return getRoomDisplayName(room);
+}
+
+export async function getSpaceStateName(
+  client: MatrixClient,
+  spaceId: string,
+): Promise<string | null> {
+  try {
+    const content = await client.getStateEvent(spaceId, EventType.RoomName, "");
+
+    if (!isRecord(content)) {
+      return null;
+    }
+
+    return normalizeName(content.name);
+  } catch {
+    return null;
+  }
+}
+
 export async function getJoinedSpaces(client: MatrixClient): Promise<JoinedSpace[]> {
   return client
     .getRooms()
     .filter((room) => isJoinedRoom(room))
     .filter((room) => isSpaceRoom(room))
-    .map((room) => roomSummary(room))
+    .map((room) => spaceSummary(room))
     .sort(compareRooms);
 }
 
@@ -104,8 +137,12 @@ export async function getSpaceRooms(client: MatrixClient, spaceId: string): Prom
     throw new Error(`Space ${spaceId} is not joined by the current Matrix session.`);
   }
 
-  const childRooms = getSpaceChildRoomsFromState(space);
-  const hierarchyRooms = await getHierarchyRooms(client, spaceId);
+  const hierarchy = await getHierarchyRooms(client, spaceId);
+  const childRooms = mergeSpaceChildRooms(
+    getSpaceChildRoomsFromState(space),
+    hierarchy.children,
+  );
+  const hierarchyRooms = hierarchy.rooms;
 
   return childRooms
     .map((child) => {
@@ -138,7 +175,7 @@ export async function getSpaceRooms(client: MatrixClient, spaceId: string): Prom
 }
 
 function pendingSpaceInviteSummary(room: Room): PendingSpaceInvite {
-  const summary = roomSummary(room);
+  const summary = spaceSummary(room);
   const inviteEvent = room.currentState.getStateEvents(
     EventType.RoomMember,
     room.myUserId,
@@ -148,6 +185,15 @@ function pendingSpaceInviteSummary(room: Room): PendingSpaceInvite {
   return {
     ...summary,
     inviterUserId,
+  };
+}
+
+function spaceSummary(room: Room): JoinedSpace {
+  const summary = roomSummary(room);
+
+  return {
+    ...summary,
+    name: getSpaceDisplayName(room),
   };
 }
 
@@ -164,6 +210,11 @@ interface HierarchyRoom {
   viaServers: string[];
   world_readable?: boolean;
   guest_can_join?: boolean;
+}
+
+interface HierarchyResult {
+  rooms: Map<string, HierarchyRoom>;
+  children: SpaceChildRoom[];
 }
 
 function getSpaceChildRoomsFromState(space: Room): SpaceChildRoom[] {
@@ -187,32 +238,109 @@ function getSpaceChildRoomsFromState(space: Room): SpaceChildRoom[] {
 async function getHierarchyRooms(
   client: MatrixClient,
   spaceId: string,
-): Promise<Map<string, HierarchyRoom>> {
+): Promise<HierarchyResult> {
   try {
     const response = await client.getRoomHierarchy(spaceId, 200, 1);
-    return new Map(
-      response.rooms.map((room) => [
-        room.room_id,
-        {
-          ...(room.canonical_alias ? { canonical_alias: room.canonical_alias } : {}),
-          ...(room.guest_can_join === undefined
-            ? {}
-            : { guest_can_join: room.guest_can_join }),
-          ...(room.join_rule ? { join_rule: room.join_rule } : {}),
-          ...(room.name ? { name: room.name } : {}),
-          ...(room.room_type ? { room_type: room.room_type } : {}),
-          viaServers: room.children_state.flatMap((child) =>
-            getViaServers(child.content as Record<string, unknown>),
-          ),
-          ...(room.world_readable === undefined
-            ? {}
-            : { world_readable: room.world_readable }),
-        },
-      ]),
+    const rooms = new Map(
+      response.rooms.map((room) => [room.room_id, hierarchyRoomSummary(room)]),
     );
+    const root = response.rooms.find((room) => room.room_id === spaceId);
+    const children =
+      root === undefined
+        ? hierarchyFallbackChildren(response.rooms, spaceId)
+        : root.children_state
+            .map((child) => {
+              const roomId = child.state_key;
+
+              if (!roomId) {
+                return null;
+              }
+
+              return {
+                roomId,
+                viaServers: getViaServers(child.content as Record<string, unknown>),
+              };
+            })
+            .filter((child): child is SpaceChildRoom => child !== null);
+
+    for (const child of children) {
+      const room = rooms.get(child.roomId);
+
+      if (room) {
+        room.viaServers = mergeViaServers(room.viaServers, child.viaServers);
+      }
+    }
+
+    return { children, rooms };
   } catch {
-    return new Map();
+    return { children: [], rooms: new Map() };
   }
+}
+
+function hierarchyRoomSummary(room: {
+  canonical_alias?: string;
+  guest_can_join?: boolean;
+  join_rule?: string;
+  name?: string;
+  room_type?: string;
+  world_readable?: boolean;
+}): HierarchyRoom {
+  return {
+    ...(room.canonical_alias ? { canonical_alias: room.canonical_alias } : {}),
+    ...(room.guest_can_join === undefined
+      ? {}
+      : { guest_can_join: room.guest_can_join }),
+    ...(room.join_rule ? { join_rule: room.join_rule } : {}),
+    ...(room.name ? { name: room.name } : {}),
+    ...(room.room_type ? { room_type: room.room_type } : {}),
+    viaServers: [],
+    ...(room.world_readable === undefined
+      ? {}
+      : { world_readable: room.world_readable }),
+  };
+}
+
+function hierarchyFallbackChildren(
+  rooms: Array<{ room_id: string; room_type?: string }>,
+  spaceId: string,
+): SpaceChildRoom[] {
+  return rooms
+    .filter((room) => room.room_id !== spaceId)
+    .filter((room) => room.room_type !== "m.space")
+    .map((room) => ({
+      roomId: room.room_id,
+      viaServers: [],
+    }));
+}
+
+function mergeSpaceChildRooms(
+  primary: readonly SpaceChildRoom[],
+  secondary: readonly SpaceChildRoom[],
+): SpaceChildRoom[] {
+  const rooms = new Map<string, SpaceChildRoom>();
+
+  for (const child of [...primary, ...secondary]) {
+    const existing = rooms.get(child.roomId);
+
+    if (!existing) {
+      rooms.set(child.roomId, {
+        roomId: child.roomId,
+        viaServers: [...child.viaServers],
+      });
+      continue;
+    }
+
+    existing.viaServers = mergeViaServers(existing.viaServers, child.viaServers);
+  }
+
+  return Array.from(rooms.values());
+}
+
+function mergeViaServers(
+  primary: readonly string[],
+  secondary: readonly string[],
+): string[] {
+  return Array.from(new Set([...primary, ...secondary]));
 }
 
 function resolveSpaceRoomStatus(
@@ -255,4 +383,25 @@ function getViaServers(content: Record<string, unknown>): string[] {
   }
 
   return via.filter((server): server is string => typeof server === "string");
+}
+
+function getExplicitRoomName(room: Room): string | null {
+  const event = room.currentState.getStateEvents(EventType.RoomName, "");
+  const content = event?.getContent<Record<string, unknown>>() ?? {};
+
+  return normalizeName(content.name);
+}
+
+function normalizeName(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const name = value.trim();
+
+  return name.length > 0 ? name : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
