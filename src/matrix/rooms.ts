@@ -84,6 +84,48 @@ export async function getJoinedDirectRooms(
   return rooms.filter((room): room is JoinedDirectRoom => room !== null).sort(compareRooms);
 }
 
+export function findJoinedDirectRoomForUser(
+  client: MatrixClient,
+  userId: string,
+  options: JoinedRoomOptions = {},
+): JoinedDirectRoom | null {
+  const directRoomUsers = getDirectRoomUsers(client);
+  const directRooms = Array.from(directRoomUsers.entries()).map(([roomId, userIds]) => {
+    if (!userIds.includes(userId)) {
+      return null;
+    }
+
+    const room = client.getRoom(roomId);
+
+    if (
+      room &&
+      isJoinedRoom(room) &&
+      !isSpaceRoom(room) &&
+      !options.excludeRoomIds?.has(roomId)
+    ) {
+      return directRoomSummary(room, userIds);
+    }
+
+    return null;
+  });
+  const fallbackRooms = client
+    .getRooms()
+    .filter((room) => isJoinedRoom(room))
+    .filter((room) => !isSpaceRoom(room))
+    .filter((room) => !options.excludeRoomIds?.has(room.roomId))
+    .filter((room) => isLikelyOneToOneRoomWithUser(room, userId))
+    .map((room) => directRoomSummary(room, [userId]));
+  const roomsById = new Map<string, JoinedDirectRoom>();
+
+  for (const room of [...directRooms, ...fallbackRooms]) {
+    if (room) {
+      roomsById.set(room.roomId, room);
+    }
+  }
+
+  return Array.from(roomsById.values()).sort(compareRooms)[0] ?? null;
+}
+
 export function isJoinedRoom(room: Room): boolean {
   return room.getMyMembership() === "join";
 }
@@ -146,7 +188,7 @@ function directRoomSummary(room: Room, userIds: string[]): JoinedDirectRoom {
 }
 
 function pendingDirectInviteSummary(room: Room): PendingDirectRoomInvite | null {
-  const inviterUserId = room.getDMInviter();
+  const inviterUserId = resolveDirectInviteInviter(room);
 
   if (!inviterUserId) {
     return null;
@@ -159,6 +201,44 @@ function pendingDirectInviteSummary(room: Room): PendingDirectRoomInvite | null 
     name: resolveDirectRoomName(room, [inviterUserId]),
     inviterUserId,
   };
+}
+
+function resolveDirectInviteInviter(room: Room): string | null {
+  const dmInviter = room.getDMInviter();
+
+  if (isOtherUserId(dmInviter, room)) {
+    return dmInviter;
+  }
+
+  if (!isLikelyOneToOneInvite(room)) {
+    return null;
+  }
+
+  const inviteEvent = room.currentState.getStateEvents(
+    EventType.RoomMember,
+    room.myUserId,
+  );
+  const inviteSender = inviteEvent?.getSender();
+
+  if (isOtherUserId(inviteSender, room)) {
+    return inviteSender;
+  }
+
+  const guessedUserId = room.guessDMUserId();
+
+  return isOtherUserId(guessedUserId, room) ? guessedUserId : null;
+}
+
+function isLikelyOneToOneInvite(room: Room): boolean {
+  return room.getInvitedAndJoinedMemberCount() === 2;
+}
+
+function isLikelyOneToOneRoomWithUser(room: Room, userId: string): boolean {
+  return room.getInvitedAndJoinedMemberCount() === 2 && room.guessDMUserId() === userId;
+}
+
+function isOtherUserId(userId: string | undefined, room: Room): userId is string {
+  return typeof userId === "string" && userId.length > 0 && userId !== room.myUserId;
 }
 
 function resolveRoomName(room: Room): string {

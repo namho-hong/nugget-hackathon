@@ -7,6 +7,8 @@ import {
   type MatrixClient,
 } from "matrix-js-sdk";
 
+import { findJoinedDirectRoomForUser } from "./rooms.js";
+
 export interface CreatedRoom {
   roomId: string;
   name: string;
@@ -79,6 +81,11 @@ export async function createDirectRoom(
   userId: string,
 ): Promise<CreatedRoom> {
   const targetUserId = validateUserId(userId);
+  const existingRoom = findJoinedDirectRoomForUser(client, targetUserId);
+
+  if (existingRoom) {
+    return { name: existingRoom.name, roomId: existingRoom.roomId };
+  }
 
   const response = await client.createRoom({
     invite: [targetUserId],

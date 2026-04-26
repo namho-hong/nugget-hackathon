@@ -212,9 +212,12 @@ async function selectHomeActionFromMatrix(): Promise<HomeAction> {
     const directMessages = await getJoinedDirectRooms(client, {
       excludeRoomIds: childRooms.roomIds,
     });
+    const joinedDirectUserIds = new Set(
+      directMessages.flatMap((directMessage) => directMessage.userIds),
+    );
     const pendingDirectInvites = getPendingDirectRoomInvites(client, {
       excludeRoomIds: childRooms.roomIds,
-    });
+    }).filter((invite) => !joinedDirectUserIds.has(invite.inviterUserId));
     return selectHomeAction({
       accountUserId: session.userId,
       directMessages,
