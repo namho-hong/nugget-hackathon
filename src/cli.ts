@@ -26,6 +26,10 @@ import {
   getJoinedSpaces,
   getPendingSpaceInvites,
   getSpaceChildRoomIds,
+  inviteToRoom,
+  isMatrixUserId,
+  joinRoom,
+  leaveRoom,
   loginWithSso,
   resolveRoomOrThrow,
   waitForRoomMembership,
@@ -39,7 +43,19 @@ import {
   launchWorkspace,
   openThreadBesideCurrentSurface,
 } from "./cmux/index.js";
-import { clearSession, loadSession, saveSession } from "./store/index.js";
+import {
+  clearAppState,
+  clearSession,
+  getAppStatePath,
+  getSessionPath,
+  loadAppState,
+  loadSession,
+  recordRecentDm,
+  recordRecentWorkspace,
+  saveAppState,
+  saveSession,
+  type NuggetAppState,
+} from "./store/index.js";
 import { formatErrorMessage } from "./util/errors.js";
 import {
   openChatView,
@@ -70,6 +86,8 @@ Commands:
   version           Show the local package version.
   login [action]    Start Matrix SSO. Action: login or register.
   logout            Clear the local Matrix session.
+  reset-state       Clear local Nugget app state without logging out.
+  doctor            Print local session, state, and cmux diagnostics.
   whoami            Show the saved Matrix session identity.
   create-workspace [name]
                     Create a private Matrix Space.
@@ -77,6 +95,11 @@ Commands:
                     Create a private Matrix room, optionally linked to a Space.
   create-dm [userId]
                     Create a direct room and invite a Matrix user.
+  join <roomIdOrAlias>
+                    Join a Matrix room by room ID or alias.
+  leave <roomId>    Leave a Matrix room or reject a pending invite.
+  invite <roomId> <userId>
+                    Invite a Matrix user to a room.
   workspace [spaceId]
                     Open a joined Matrix Space and choose one of its rooms.
   workspace-controller <spaceId>
@@ -136,6 +159,19 @@ async function run(argv: string[]): Promise<CommandResult> {
     };
   }
 
+  if (command === "reset-state") {
+    await clearAppState();
+    return {
+      exitCode: 0,
+      output: `Cleared local Nugget app state at ${getAppStatePath()}.\n`,
+      stream: "stdout",
+    };
+  }
+
+  if (command === "doctor") {
+    return handleDoctor();
+  }
+
   if (command === "whoami" || command === "session") {
     return handleWhoami();
   }
@@ -150,6 +186,18 @@ async function run(argv: string[]): Promise<CommandResult> {
 
   if (command === "create-dm") {
     return handleCreateDmCommand(args.slice(1));
+  }
+
+  if (command === "join") {
+    return handleJoinCommand(args.slice(1));
+  }
+
+  if (command === "leave") {
+    return handleLeaveCommand(args.slice(1));
+  }
+
+  if (command === "invite") {
+    return handleInviteCommand(args.slice(1));
   }
 
   if (command === "workspace") {
@@ -223,11 +271,21 @@ async function handleDefaultHome(): Promise<CommandResult> {
 
 async function selectHomeActionFromMatrix(): Promise<HomeAction> {
   return withMatrixClient(async (client, session) => {
+    const localState = await loadAppState();
     const workspaces = await getJoinedSpaces(client);
     const childRooms = await getSpaceChildRoomIds(client, workspaces);
     const directMessages = await getJoinedDirectRooms(client, {
       excludeRoomIds: childRooms.roomIds,
     });
+    const prunedState = pruneAppState(localState.state, {
+      directRoomIds: new Set(directMessages.map((directMessage) => directMessage.roomId)),
+      spaceIds: new Set(workspaces.map((workspace) => workspace.roomId)),
+    });
+
+    if (localState.warnings.length === 0 && prunedState !== localState.state) {
+      await saveAppState(prunedState);
+    }
+
     const joinedDirectUserIds = new Set(
       directMessages.flatMap((directMessage) => directMessage.userIds),
     );
@@ -237,11 +295,21 @@ async function selectHomeActionFromMatrix(): Promise<HomeAction> {
     const pendingWorkspaceInvites = getPendingSpaceInvites(client);
     return selectHomeAction({
       accountUserId: session.userId,
-      directMessages,
+      directMessages: rankByRecent(
+        directMessages,
+        prunedState.recentDms,
+        (directMessage) => directMessage.roomId,
+        (recent) => recent.roomId,
+      ),
       pendingDirectInvites,
       pendingWorkspaceInvites,
-      warnings: childRooms.warnings,
-      workspaces,
+      warnings: [...childRooms.warnings, ...localState.warnings],
+      workspaces: rankByRecent(
+        workspaces,
+        prunedState.recentWorkspaces,
+        (workspace) => workspace.roomId,
+        (recent) => recent.spaceId,
+      ),
     });
   });
 }
@@ -330,6 +398,46 @@ async function handleWhoami(): Promise<CommandResult> {
   };
 }
 
+async function handleDoctor(): Promise<CommandResult> {
+  const lines = ["Nugget doctor", ""];
+
+  lines.push(`Session path: ${getSessionPath()}`);
+  try {
+    const session = await loadSession();
+    lines.push(
+      session
+        ? `Session: ok (${session.userId} on ${session.baseUrl})`
+        : "Session: missing",
+    );
+  } catch (error) {
+    lines.push(`Session: invalid (${formatError(error)})`);
+  }
+
+  const appState = await loadAppState();
+  lines.push(`App state path: ${appState.path}`);
+  lines.push(
+    `App state: ${appState.warnings.length > 0 ? "ignored" : "ok"} (${appState.state.recentWorkspaces.length} workspaces, ${appState.state.recentDms.length} DMs)`,
+  );
+
+  for (const warning of appState.warnings) {
+    lines.push(`App state warning: ${warning}`);
+  }
+
+  const cmux = new CmuxClient();
+  try {
+    await cmux.tree({ all: true });
+    lines.push("cmux: ok");
+  } catch (error) {
+    lines.push(`cmux: unavailable (${formatError(error)})`);
+  }
+
+  return {
+    exitCode: 0,
+    output: `${lines.join("\n")}\n`,
+    stream: "stdout",
+  };
+}
+
 async function handleCreateWorkspaceCommand(args: string[]): Promise<CommandResult> {
   return handleCreateWorkspaceInteractive(args.length > 0 ? args.join(" ") : undefined);
 }
@@ -343,6 +451,75 @@ async function handleCreateRoomCommand(args: string[]): Promise<CommandResult> {
 
 async function handleCreateDmCommand(args: string[]): Promise<CommandResult> {
   return handleCreateDmInteractive(args[0]);
+}
+
+async function handleJoinCommand(args: string[]): Promise<CommandResult> {
+  const roomIdOrAlias = args[0];
+
+  if (!roomIdOrAlias || args.length > 1) {
+    return {
+      exitCode: 1,
+      output: "Usage: nugget join <roomIdOrAlias>\n",
+      stream: "stderr",
+    };
+  }
+
+  return withMatrixClient(async (client) => {
+    const roomId = await joinRoom(client, roomIdOrAlias);
+    const joinedAs = roomId === roomIdOrAlias ? roomId : `${roomIdOrAlias} as ${roomId}`;
+
+    return {
+      exitCode: 0,
+      output: `Joined ${joinedAs}.\nOpen it with: nugget open ${roomId}\n`,
+      stream: "stdout",
+    };
+  });
+}
+
+async function handleLeaveCommand(args: string[]): Promise<CommandResult> {
+  const roomId = args[0];
+
+  if (!roomId || args.length > 1) {
+    return {
+      exitCode: 1,
+      output: "Usage: nugget leave <roomId>\n",
+      stream: "stderr",
+    };
+  }
+
+  return withMatrixClient(async (client) => {
+    await leaveRoom(client, roomId);
+
+    return {
+      exitCode: 0,
+      output: `Left room ${roomId}.\n`,
+      stream: "stdout",
+    };
+  });
+}
+
+async function handleInviteCommand(args: string[]): Promise<CommandResult> {
+  const roomId = args[0];
+  const userId = args[1];
+
+  if (!roomId || !userId || args.length > 2) {
+    return {
+      exitCode: 1,
+      output: "Usage: nugget invite <roomId> <userId>\n",
+      stream: "stderr",
+    };
+  }
+
+  return withMatrixClient(async (client) => {
+    resolveRoomOrThrow(client, roomId);
+    await inviteToRoom(client, roomId, userId);
+
+    return {
+      exitCode: 0,
+      output: `Invited ${userId} to ${roomId}.\n`,
+      stream: "stdout",
+    };
+  });
 }
 
 async function handleWorkspaceCommand(args: string[]): Promise<CommandResult> {
@@ -372,7 +549,19 @@ async function handleWorkspaceCommand(args: string[]): Promise<CommandResult> {
     }
 
     const workspace = resolveJoinedSpace(client, action.spaceId);
-    await launchWorkspace(workspace);
+
+    try {
+      await launchWorkspace(workspace);
+    } catch (error) {
+      throw new Error(
+        `Space ${workspace.roomId} is joined, but Nugget could not open its cmux workspace: ${formatError(error)}`,
+      );
+    }
+
+    await recordRecentWorkspace({
+      name: workspace.name,
+      spaceId: workspace.roomId,
+    });
 
     return { type: "quit" } as const;
   });
@@ -408,7 +597,7 @@ async function handleWorkspaceControllerCommand(args: string[]): Promise<Command
     return await runSpaceRoomPicker({
       loadRooms: () => getJoinedSpaceRooms(client, spaceId),
       onInviteUser: async (userId) => {
-        await client.invite(spaceId, userId);
+        await inviteToRoom(client, spaceId, userId);
       },
       onOpenRoom: (roomId) => controller.openRoom(roomId),
       title: `Workspace: ${space.name}`,
@@ -621,9 +810,16 @@ async function handleSendCommand(args: string[]): Promise<CommandResult> {
 
 async function handleOpenRoom(roomId: string): Promise<CommandResult> {
   const result = await withMatrixClient(async (client) => {
-    return await openChatView(client, roomId, {
+    const room = resolveRoomOrThrow(client, roomId);
+
+    await recordRecentDm({
+      name: getRoomDisplayName(room),
+      roomId: room.roomId,
+    });
+
+    return await openChatView(client, room.roomId, {
       onOpenThread: (threadRootEventId) =>
-        openThreadBesideCurrentSurface(roomId, threadRootEventId),
+        openThreadBesideCurrentSurface(room.roomId, threadRootEventId),
     });
   });
 
@@ -633,7 +829,19 @@ async function handleOpenRoom(roomId: string): Promise<CommandResult> {
 async function handleOpenWorkspace(spaceId: string): Promise<CommandResult> {
   return withMatrixClient(async (client) => {
     const workspace = resolveJoinedSpace(client, spaceId);
-    await launchWorkspace(workspace);
+
+    try {
+      await launchWorkspace(workspace);
+    } catch (error) {
+      throw new Error(
+        `Space ${workspace.roomId} is joined, but Nugget could not open its cmux workspace: ${formatError(error)}`,
+      );
+    }
+
+    await recordRecentWorkspace({
+      name: workspace.name,
+      spaceId: workspace.roomId,
+    });
 
     return {
       exitCode: 0,
@@ -737,6 +945,8 @@ async function handleCreateMatrixRoom(
 async function handleCreateDm(userId: string): Promise<CommandResult> {
   const result = await withMatrixClient(async (client) => {
     const created = await createDirectRoom(client, userId);
+    await recordRecentDm({ name: created.name, roomId: created.roomId });
+
     return await openChatView(client, created.roomId, {
       onOpenThread: (threadRootEventId) =>
         openThreadBesideCurrentSurface(created.roomId, threadRootEventId),
@@ -804,6 +1014,11 @@ async function handleAcceptDmInvite(roomId: string): Promise<CommandResult> {
       }
     }
 
+    await recordRecentDm({
+      name: getRoomDisplayName(joinedRoom),
+      roomId: joinedRoom.roomId,
+    });
+
     return await openChatView(client, joinedRoom.roomId, {
       onOpenThread: (threadRootEventId) =>
         openThreadBesideCurrentSurface(joinedRoom.roomId, threadRootEventId),
@@ -824,10 +1039,22 @@ async function handleAcceptWorkspaceInvite(spaceId: string): Promise<CommandResu
     const joinedSpace = await client.joinRoom(spaceId);
     await waitForRoomMembership(client, joinedSpace.roomId, "join");
     const syncedSpace = client.getRoom(joinedSpace.roomId) ?? joinedSpace;
-
-    await launchWorkspace({
+    const workspace = {
       name: getRoomDisplayName(syncedSpace),
       roomId: syncedSpace.roomId,
+    };
+
+    try {
+      await launchWorkspace(workspace);
+    } catch (error) {
+      throw new Error(
+        `Accepted workspace invite for ${workspace.roomId}, but Nugget could not open its cmux workspace: ${formatError(error)}`,
+      );
+    }
+
+    await recordRecentWorkspace({
+      name: workspace.name,
+      spaceId: workspace.roomId,
     });
 
     return {
@@ -919,8 +1146,52 @@ function parseCreateRoomArgs(args: string[]): { name?: string; spaceId?: string 
   };
 }
 
-function isMatrixUserId(value: string): boolean {
-  return /^@[^:\s]+:.+$/.test(value);
+function rankByRecent<T, R extends { openedAt: number }>(
+  items: readonly T[],
+  recents: readonly R[],
+  getItemId: (item: T) => string,
+  getRecentId: (recent: R) => string,
+): T[] {
+  const originalIndex = new Map(items.map((item, index) => [getItemId(item), index]));
+  const openedAtById = new Map(recents.map((recent) => [getRecentId(recent), recent.openedAt]));
+
+  return [...items].sort((a, b) => {
+    const aOpenedAt = openedAtById.get(getItemId(a)) ?? 0;
+    const bOpenedAt = openedAtById.get(getItemId(b)) ?? 0;
+    const recentDelta = bOpenedAt - aOpenedAt;
+
+    if (recentDelta !== 0) {
+      return recentDelta;
+    }
+
+    return (originalIndex.get(getItemId(a)) ?? 0) - (originalIndex.get(getItemId(b)) ?? 0);
+  });
+}
+
+function pruneAppState(
+  state: NuggetAppState,
+  joined: { spaceIds: ReadonlySet<string>; directRoomIds: ReadonlySet<string> },
+): NuggetAppState {
+  const recentWorkspaces = state.recentWorkspaces.filter((recent) =>
+    joined.spaceIds.has(recent.spaceId),
+  );
+  const recentDms = state.recentDms.filter((recent) =>
+    joined.directRoomIds.has(recent.roomId),
+  );
+
+  if (
+    recentWorkspaces.length === state.recentWorkspaces.length &&
+    recentDms.length === state.recentDms.length
+  ) {
+    return state;
+  }
+
+  return {
+    ...(state.lastOpenedAt === undefined ? {} : { lastOpenedAt: state.lastOpenedAt }),
+    recentDms,
+    recentWorkspaces,
+    version: state.version,
+  };
 }
 
 function parseLoginAction(value: string | undefined): LoginAction | null {

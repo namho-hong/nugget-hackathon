@@ -17,7 +17,9 @@ import {
   getRoomDisplayName,
   getThreadReplyRootEventId,
   getThreadRootForEvent,
+  inviteToRoom,
   isThreadReply,
+  leaveRoom,
   loadThreadEvents,
   resolveRoomOrThrow,
   sendThreadMessage,
@@ -216,7 +218,7 @@ async function runInteractiveChat(
   process.stdout.write("\x1b[?25l\x1b[?1000l\x1b[?1006l");
 
   return await new Promise<ChatViewResult>((resolve) => {
-    const finish = (result: ChatViewResult): void => {
+    const finish = (result: ChatViewResult, message?: string): void => {
       if (closed) {
         return;
       }
@@ -224,6 +226,9 @@ async function runInteractiveChat(
       closed = true;
       cleanup();
       process.stdout.write("\x1b[2J\x1b[H");
+      if (message) {
+        process.stdout.write(`${message}\n`);
+      }
       resolve(result);
     };
 
@@ -323,6 +328,28 @@ async function runInteractiveChat(
         return;
       }
 
+      if (text === "/leave") {
+        if (mode.type !== "room") {
+          inputBuffer = "";
+          setNotice("Leave is unavailable in this thread view.");
+          return;
+        }
+
+        inputBuffer = "";
+        submitting = true;
+        render();
+
+        try {
+          await leaveRoom(client, room.roomId);
+          finish({ type: "quit" }, `Left room ${room.roomId}.`);
+        } catch (error) {
+          submitting = false;
+          setNotice(`Leave failed for ${room.roomId}: ${formatError(error)}`);
+        }
+
+        return;
+      }
+
       if (text === "/select") {
         if (!canOpenThreads(mode)) {
           inputBuffer = "";
@@ -345,7 +372,7 @@ async function runInteractiveChat(
         return;
       }
 
-      if (text.startsWith("/invite")) {
+      if (text === "/invite" || text.startsWith("/invite ")) {
         const userId = text.slice("/invite".length).trim();
 
         if (userId.length === 0) {
@@ -359,7 +386,7 @@ async function runInteractiveChat(
         render();
 
         try {
-          await client.invite(room.roomId, userId);
+          await inviteToRoom(client, room.roomId, userId);
           setNotice(`Invited ${userId}.`);
         } catch (error) {
           setNotice(`Invite failed for ${userId} in ${room.roomId}: ${formatError(error)}`);
@@ -798,6 +825,7 @@ function slashCommands(mode: ChatViewMode): string[] {
     "/help",
     ...(canOpenThreads(mode) ? ["/select"] : []),
     "/invite @user:server",
+    ...(mode.type === "room" ? ["/leave"] : []),
     "/home",
     "/quit",
     "/exit",

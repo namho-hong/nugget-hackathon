@@ -1,0 +1,605 @@
+# Persistence And Recovery
+
+## Goal
+
+Implement `docs/persistence-recovery-plan.md` so Nugget keeps non-secret local
+state separate from Matrix credentials, recovers cleanly from damaged local
+files, and treats stale cmux panes as hints instead of authoritative state.
+
+## Definition of Done
+
+- [ ] Matrix credentials remain isolated in `session.json`.
+- [ ] Non-secret app state is stored in a separate `state.json`.
+- [ ] Corrupt session files produce an actionable recovery message.
+- [ ] Corrupt or unknown app-state files do not block login or chat.
+- [ ] Home menu ranks Matrix-derived workspaces and DMs with recent hints only.
+- [ ] Workspace and DM opens record recent hints.
+- [ ] `reset-state` clears app state without logging out.
+- [ ] `doctor` prints local diagnostics without exposing secrets.
+- [ ] cmux workspace scoring keeps description matches highest priority.
+- [ ] Stale room, thread, and agent pane focus failures open fresh panes where
+  the current code has those pane types.
+- [ ] Partial Matrix create/link/open failures report created durable IDs.
+- [ ] `pnpm build` passes.
+- [ ] `./nugget --help`, `./nugget reset-state`, and `./nugget doctor` run.
+- [x] Working diff is reviewed for unrelated edits.
+
+## Checklist
+
+- [x] Read `docs/persistence-recovery-plan.md`.
+- [x] Inspect store, CLI, home, Matrix create, and cmux controller code.
+- [ ] Add `src/store/app-state.ts`.
+- [ ] Export app-state helpers from `src/store/index.ts`.
+- [ ] Improve session load diagnostics without changing credential storage.
+- [ ] Rank home workspaces and DMs with validated app-state recents.
+- [ ] Record recent workspace and DM opens.
+- [ ] Add `reset-state` and `doctor` commands.
+- [ ] Harden cmux stale focus handling.
+- [ ] Improve partial create/link/open messages.
+- [ ] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+## Verification Commands
+
+```sh
+pnpm build
+./nugget --help
+./nugget reset-state
+./nugget doctor
+git diff --check
+```
+
+Manual verification requiring Matrix account and cmux:
+
+```sh
+./nugget login
+./nugget
+./nugget workspace "<joined-space-id>"
+```
+
+## Current Status
+
+Initial inspection is complete. Existing uncommitted membership changes in
+`src/cli.ts`, `src/matrix/index.ts`, and `src/matrix/membership.ts` are treated
+as pre-existing work and will be preserved.
+
+# Join Leave And Invite UX
+
+## Goal
+
+Implement and verify the remaining `docs/membership-plan.md` membership flows:
+explicit room join, room leave, and room invite commands through the CLI and
+chat view.
+
+## Definition of Done
+
+- [x] `./nugget join <roomIdOrAlias>` is wired and returns the joined room ID.
+- [x] `./nugget leave <roomId>` is wired and waits until the room is no longer
+  joined locally.
+- [x] `./nugget invite <roomId> <userId>` is wired and validates Matrix user IDs.
+- [x] Chat `/invite @user:server` uses the shared invite helper.
+- [x] Chat `/leave` leaves the room and exits the chat view after success.
+- [x] CLI and slash help list the new implemented commands.
+- [x] `pnpm build` passes.
+- [ ] Working diff is reviewed for unrelated edits.
+
+## Checklist
+
+- [x] Read `docs/membership-plan.md`.
+- [x] Inspect existing Matrix membership, invite, home, CLI, and chat code.
+- [x] Identify already implemented invite visibility and invite accept/reject
+  flows.
+- [x] Update the membership plan for already implemented pieces.
+- [x] Add shared membership helpers.
+- [x] Wire CLI join, leave, and invite commands.
+- [x] Wire chat `/leave` and shared `/invite`.
+- [x] Run verification commands.
+- [ ] Review working diff for accidental unrelated edits.
+
+## Verification Commands
+
+```sh
+pnpm build
+./nugget --help
+git diff --check
+```
+
+Manual verification requiring Matrix account:
+
+```sh
+./nugget login
+./nugget join "#some-public-room:server"
+./nugget open "<joined-room-id>"
+./nugget invite "<joined-room-id>" "@user:server"
+./nugget leave "<joined-room-id>"
+```
+
+## Current Status
+
+Implementation is complete at build level. Inspection found that pending
+DM/workspace invite visibility, accept, and reject flows already existed in
+Home, and `waitForRoomMembership` already existed in `src/matrix/client.ts`.
+
+Added:
+
+- Shared `src/matrix/membership.ts` helpers for join, leave, invite, membership
+  lookup, user ID validation, and leave sync waiting.
+- CLI `join`, `leave`, and `invite` commands.
+- Chat `/leave`, plus shared-helper-backed `/invite`.
+- Minimal TypeScript fixes in concurrent `src/store/app-state.ts` work so
+  `pnpm build` remains green.
+
+Verification passed:
+
+- `pnpm build`
+- `./nugget --help`
+- `./nugget join`
+- `./nugget leave`
+- `./nugget invite`
+- `git diff --check`
+
+Not run:
+
+- Live Matrix join/invite/leave commands.
+
+Diff review:
+
+- Membership work changed `src/cli.ts`, `src/matrix/index.ts`,
+  `src/matrix/membership.ts`, and `src/ui/chat-view.ts`.
+- `src/store/app-state.ts`, `src/store/index.ts`, and `src/store/session.ts`
+  came from unrelated concurrent app-state/session work. Only the app-state
+  TypeScript build errors were minimally fixed; the session/index changes were
+  left otherwise untouched.
+
+# Demo Hardening
+
+## Follow-up: Workspace Child Room Discovery
+
+Goal: A workspace should list all visible child rooms, not only rooms the user
+has already joined, and let the user join or accept invites from that list.
+
+Definition of Done:
+
+- [ ] Workspace picker shows joined child rooms as openable.
+- [ ] Workspace picker shows invited child rooms with an accept action.
+- [ ] Workspace picker shows unjoined visible child rooms with a join action.
+- [ ] Workspace picker shows missing/inaccessible child rooms as disabled.
+- [ ] Joining or accepting a child room refreshes the picker and then allows
+  opening the room.
+- [ ] Existing workspace activity tracking continues to watch joined rooms only.
+- [ ] `pnpm build` passes.
+- [ ] `git diff --check` passes.
+
+Checklist:
+
+- [x] Inspect current Space child room filtering.
+- [x] Inspect workspace picker action flow.
+- [ ] Add child-room summary/status helper.
+- [ ] Extend workspace picker actions and rendering.
+- [ ] Wire join/accept actions in workspace controller.
+- [ ] Run verification commands.
+- [ ] Review working diff for accidental unrelated edits.
+
+Verification Commands:
+
+```sh
+pnpm build
+git diff --check
+```
+
+Manual verification requiring Matrix account and cmux:
+
+```sh
+./nugget workspace "<joined-space-id>"
+# Confirm joined, invited, joinable, and inaccessible child rooms render with status.
+# Join/accept a child room and confirm the picker refreshes.
+```
+
+Current Status:
+
+Started. `getJoinedSpaceRooms()` currently filters Space children down to
+locally visible joined non-Space rooms only, so unjoined/invited children are not
+represented in the workspace picker.
+
+## Follow-up: Workspace Invite Accept Sync
+
+Goal: Accepting a workspace invite should not leave the invite pending or launch
+a workspace controller before the Matrix session sees the Space as joined.
+
+Definition of Done:
+
+- [x] Workspace invite accept waits until the accepted Space membership is synced
+  as `join`.
+- [x] The cmux workspace controller is launched only after the join is visible.
+- [x] The pending workspace invite should disappear from home after accept once
+  sync completes.
+- [x] `pnpm build` passes.
+- [x] Working diff is reviewed for unrelated edits.
+
+Checklist:
+
+- [x] Inspect workspace invite accept flow.
+- [x] Inspect workspace controller joined-space validation.
+- [x] Add a narrow Matrix membership wait helper.
+- [x] Use the helper in workspace invite accept.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+Verification Commands:
+
+```sh
+pnpm build
+git diff --check
+```
+
+Manual verification requiring Matrix account and cmux:
+
+```sh
+./nugget
+# Accept a pending workspace invite from Home.
+# Confirm the workspace picker opens without "Space ... is not joined".
+# Return Home and confirm the invite no longer appears.
+```
+
+Current Status:
+
+Implementation added a Matrix membership wait after `client.joinRoom(spaceId)`
+and before launching cmux. Local verification passed:
+
+- `pnpm build`
+- `git diff --check`
+
+Manual live Matrix/cmux verification still requires accepting a real pending
+workspace invite.
+
+## Goal
+
+Implement the remaining `docs/demo-hardening-plan.md` stabilization work without
+redoing the already-completed thread, workspace reuse, DM, and invite changes in
+this worktree.
+
+## Definition of Done
+
+- [x] `./nugget --help` lists implemented CLI commands only.
+- [x] Room slash help lists commands that work in room mode.
+- [x] Thread slash help lists commands that work in thread mode.
+- [x] Unknown CLI and slash commands fail locally without sending Matrix text.
+- [x] Ctrl-C and quit flows restore raw terminal mode in pickers and chat views.
+- [x] Pickers redraw on terminal resize.
+- [x] Pickers and chat views stay readable in narrow terminals and with wide text.
+- [x] Matrix and cmux failures include action context without leaking session tokens.
+- [x] Agent-specific hardening is explicitly skipped because the current source
+  has no implemented `@agent` or `/ask` command path.
+- [x] `docs/demo-script.md` exists and matches current commands.
+- [x] Credential-free smoke script exists.
+- [x] `pnpm build` passes.
+- [x] Smoke commands run where practical.
+
+## Checklist
+
+- [x] Audit current CLI/slash command surface.
+- [x] Add or reuse terminal display helpers for picker layout.
+- [x] Add resize handlers and idempotent cleanup to pickers.
+- [x] Align room/thread slash help with implemented behavior.
+- [x] Improve high-risk Matrix/cmux error messages.
+- [x] Create `docs/demo-script.md`.
+- [x] Create credential-free `scripts/smoke.sh`.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+## Verification Commands
+
+```sh
+pnpm build
+./nugget --help
+./nugget logout
+./scripts/smoke.sh
+git diff --check
+```
+
+Manual verification requiring Matrix account and cmux:
+
+```sh
+./nugget login
+./nugget
+./nugget workspace "<joined-space-id>"
+```
+
+## Current Status
+
+Implementation and local verification are complete. Existing completed
+thread/workspace/DM/invite work was preserved and skipped. `docs/` and
+`TASKS.md` are ignored by this repo's `.gitignore`, so their changes exist in
+the workspace but do not appear in `git status`.
+
+Verification passed:
+
+- `pnpm build`
+- `./nugget --help`
+- `./nugget logout` with escalated filesystem access for the local session file
+- `./scripts/smoke.sh` with escalated filesystem access for logout
+- `./nugget nope`
+- `git diff --check`
+- Self-review follow-up:
+  - cmux missing-binary errors now hit the actionable fallback path.
+  - Error redaction now covers `loginToken`, `accessToken`, and `refreshToken`.
+  - Local checks passed for cmux `ENOENT` fallback and redaction.
+
+Not run:
+
+- Live Matrix/cmux demo path.
+
+# Notifications And Activity
+
+## Goal
+
+Implement `docs/notifications-activity-plan.md` so incoming Matrix activity is
+visible in room/thread chat and workspace pickers without stealing terminal
+focus or corrupting composer input.
+
+## Definition of Done
+
+- [ ] Incoming messages preserve composer input and cursor position.
+- [ ] Bottom-pinned room/thread views render incoming messages normally.
+- [ ] Scrolled-up room/thread views do not force-scroll to the bottom.
+- [ ] Scrolled-up room/thread views show a "new messages below" marker.
+- [ ] Jumping or scrolling to bottom clears the new-message marker.
+- [ ] Messages authored by the local user do not trigger external notifications.
+- [ ] Duplicate events do not trigger duplicate notifications.
+- [ ] Hidden main-room thread replies do not trigger main-room notifications.
+- [ ] Thread views receive only matching thread events.
+- [ ] Thread replies update main-room reply badges where local data permits.
+- [ ] Workspace picker marks rooms with new activity while running.
+- [ ] Opening/focusing a room clears its workspace picker activity mark.
+- [ ] cmux notification failures do not interrupt chat or picker flows.
+- [x] `pnpm build` passes.
+- [x] `./nugget --help` still works.
+
+## Checklist
+
+- [x] Read `docs/notifications-activity-plan.md`.
+- [x] Inspect chat view, workspace picker, cmux client, room helpers, and CLI wiring.
+- [x] Add best-effort cmux notification helper.
+- [x] Add chat view bottom/new-message marker handling.
+- [x] Add chat notification filtering and summary formatting.
+- [x] Add workspace picker activity tracking and clearing.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+## Verification Commands
+
+```sh
+pnpm build
+./nugget --help
+git diff --check
+```
+
+Manual verification requiring Matrix account and cmux:
+
+```sh
+./nugget login
+./nugget workspace "<joined-space-id>"
+```
+
+## Current Status
+
+Code implementation is complete with local verification:
+
+- `pnpm build`
+- `./nugget --help`
+- `git diff --check`
+
+Not run:
+
+- Live Matrix/cmux checks for incoming messages, picker activity, and cmux
+  notification delivery.
+
+# Matrix Thread Support
+
+## Goal
+
+Implement the `docs/thread-plan.md` phase: Nugget can select room messages,
+open Matrix thread panes in cmux, load thread-only timelines, send thread
+replies, and keep normal room timelines readable.
+
+## Definition of Done
+
+- [x] `/select` enters message selection mode in a normal room view.
+- [x] Selection mode highlights one selectable message at a time.
+- [x] Up/down movement changes the selected message.
+- [x] Enter opens the selected message's thread.
+- [x] Escape exits selection mode without opening a thread.
+- [x] Selecting a thread reply resolves back to its thread root event ID.
+- [x] `./nugget thread <roomId> <threadRootEventId>` opens a thread-only chat view.
+- [x] Room views open thread panes beside the current cmux surface.
+- [x] Opening the same thread again focuses the existing thread pane.
+- [x] Thread view loads events with Matrix relations instead of full room history.
+- [x] Thread view sends replies with `m.relates_to.rel_type = m.thread`.
+- [x] Thread replies render immediately with a local pending event.
+- [x] Main room timeline hides thread reply events.
+- [x] Root messages show reply count badges where local events provide enough data.
+- [x] `pnpm build` passes.
+- [x] Existing room chat and cmux workspace flows still work at build/API level.
+
+## Checklist
+
+- [x] Read `docs/thread-plan.md`.
+- [x] Inspect current CLI, chat view, Matrix client, and cmux controller code.
+- [x] Add Matrix thread relation helpers.
+- [x] Add thread pane cmux helper.
+- [x] Add `thread` CLI command and help text.
+- [x] Add `openThreadView()` and thread-only chat behavior.
+- [x] Add `/select` mode, selection rendering, and thread root resolution.
+- [x] Add main-room thread filtering and local reply count badges.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+## Verification Commands
+
+```sh
+pnpm build
+./nugget --help
+git diff --check
+```
+
+Manual verification requiring a Matrix account and cmux:
+
+```sh
+./nugget login
+./nugget workspace "<joined-space-id>"
+./nugget thread "<room-id>" "<root-event-id>"
+```
+
+## Current Status
+
+Implementation is complete and local verification passed:
+
+- `pnpm build`
+- `./nugget --help`
+- `git diff --check`
+
+Not run:
+
+- Live Matrix/cmux checks, because they require a joined Matrix room and active
+  cmux workspace.
+
+## Follow-up: Unique DMs
+
+Goal: Creating a DM with a user should reuse an existing joined DM with that
+user instead of creating duplicate rooms and invites.
+
+Definition of Done:
+
+- [x] Existing joined DMs are detected from local direct chat metadata.
+- [x] `create-dm <userId>` opens the existing joined DM when present.
+- [x] `create-dm <userId>` creates and invites only when no joined DM exists.
+- [x] Pending DM invites without `is_direct` continue to appear on home.
+- [x] Pending invites from users with an existing joined DM are hidden on home.
+- [x] `pnpm build` passes.
+
+Current status:
+
+- Current Matrix session `@namho-hong:matrix.org` has three joined DMs and
+  three pending invites involving `@dan-hong:matrix.org`.
+- `findJoinedDirectRoomForUser(client, "@dan-hong:matrix.org")` resolves the
+  latest joined DM `!FhnwcwDUFPxvqYjyzA:matrix.org`.
+- Home filters pending DM invites from users already present in joined DMs.
+- `pnpm build` and `git diff --check` pass.
+
+## Follow-up: Workspace Picker Stability
+
+Goal: Selecting a workspace from Nugget home should switch to the cmux workspace
+and leave the workspace room picker visible.
+
+Definition of Done:
+
+- [x] Compare current workspace launch flow against `/Users/dan/nugget`.
+- [x] Existing room panes are not reused as the workspace picker surface.
+- [x] Existing controller surface is respawned when selecting a workspace.
+- [x] Existing workspaces with only a shell surface reuse that shell as picker.
+- [x] Existing workspaces with room panes create a separate picker split.
+- [x] `./nugget workspace "<spaceId>"` leaves the cmux workspace selected.
+- [x] Workspace picker remains visible instead of dropping back to the shell.
+- [x] `pnpm build` passes.
+- [x] `git diff --check` passes.
+
+Current status:
+
+- OFFLIGHT workspace `workspace:30` opens to `surface:182`.
+- `cmux tree --json --all` reports `selected_workspace_ref: workspace:30`.
+- `cmux read-screen --workspace workspace:30 --surface surface:182` shows the
+  `Workspace: OFFLIGHT` room picker.
+
+## Follow-up: Already-Open Workspace Reuse
+
+Goal: Running `./nugget workspace "<spaceId>"` when the same Nugget workspace is
+already open in cmux should select and reuse that workspace instead of creating a
+new terminal that immediately exits or appears to do nothing.
+
+Definition of Done:
+
+- [x] Existing Nugget workspaces are detected by stable `nugget-space:<spaceId>`
+  description.
+- [x] Duplicate candidate workspaces prefer the exact space description and an
+  existing matching workspace-controller surface.
+- [x] Existing workspaces with only room panes can create a picker split and
+  resolve its pane from a refreshed cmux tree.
+- [x] Workspace selection activates cmux app focus before selecting, because
+  inactive focus can make `select-workspace` return OK without changing the
+  selected workspace.
+- [x] cmux control commands clear caller-only `CMUX_WORKSPACE_ID`,
+  `CMUX_SURFACE_ID`, `CMUX_TAB_ID`, and pane/panel env vars before spawning
+  cmux so explicit workspace refs are not overridden by the launching terminal.
+- [x] Already-visible workspace picker surfaces are reused without respawning.
+- [x] `./nugget workspace "<spaceId>"` reuses the already-open workspace in a
+  live cmux session.
+- [x] `pnpm build` passes.
+- [x] `git diff --check` passes.
+
+Current status:
+
+- Code path updated.
+- Manual `cmux set-app-focus active` + `cmux select-workspace --workspace
+  workspace:37` confirmed that app focus was the missing cmux condition.
+- `pnpm build` and `git diff --check` pass.
+- Live verification passed for OFFLIGHT:
+  `./nugget workspace '!BzZtZEJPYExMbDngnK:matrix.org'` selected existing
+  `workspace:37` and showed the workspace picker on `surface:195`.
+
+## Follow-up: Workspace Invites
+
+Goal: After opening a workspace menu, Nugget should allow inviting a Matrix user
+to the selected workspace, and recipients should see and accept/reject workspace
+invites from home.
+
+Definition of Done:
+
+- [x] Workspace room picker includes an invite action.
+- [x] Invite action prompts for a Matrix user ID without breaking terminal raw
+  mode.
+- [x] `/home` and `/quit` still work from invite prompt.
+- [x] Valid invite sends a Matrix invite to the selected Space room.
+- [x] Invite success and failure messages are shown in the workspace picker.
+- [x] Home shows pending workspace invites separately from DM invites.
+- [x] Workspace invite detail screen shows inviter and Space ID.
+- [x] Accepting a workspace invite joins the Space and opens it in cmux.
+- [x] Rejecting a workspace invite leaves/rejects the invite.
+- [x] `pnpm build` passes.
+- [x] `git diff --check` passes.
+
+Checklist:
+
+- [x] Inspect current workspace picker and CLI controller flow.
+- [x] Inspect current DM invite and Space summary helpers.
+- [x] Add invite action and prompt handling to `runSpaceRoomPicker`.
+- [x] Wire workspace-controller invite callback to `client.invite`.
+- [x] Add pending Space invite detection.
+- [x] Add home UI actions for workspace invite accept/reject.
+- [x] Wire CLI handlers for workspace invite accept/reject.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+Verification Commands:
+
+```sh
+pnpm build
+git diff --check
+```
+
+Manual verification requiring a Matrix account and cmux:
+
+```sh
+./nugget workspace "<joined-space-id>"
+```
+
+Current status:
+
+- Workspace picker and controller flow inspected.
+- DM invite handling and Space summary helpers inspected.
+- Code path updated.
+- `pnpm build` passes.
+- `git diff --check` passes.
+- Diff reviewed. This follow-up changed workspace invite paths in `src/cli.ts`,
+  `src/matrix/spaces.ts`, `src/ui/home-menu.ts`, and
+  `src/ui/space-room-picker.ts`; other dirty files are pre-existing thread and
+  cmux work from the current worktree.
