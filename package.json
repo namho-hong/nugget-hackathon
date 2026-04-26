@@ -1,0 +1,26 @@
+{
+  "name": "nugget-hackathon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "nugget": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.9.0",
+  "dependencies": {
+    "matrix-js-sdk": "41.3.0"
+  }
+}

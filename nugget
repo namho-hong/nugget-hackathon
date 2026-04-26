@@ -1,0 +1,20 @@
+#!/usr/bin/env sh
+set -eu
+
+SELF=$0
+
+while [ -h "$SELF" ]; do
+  LINK=$(readlink "$SELF")
+  case "$LINK" in
+    /*) SELF=$LINK ;;
+    *) SELF=$(dirname -- "$SELF")/$LINK ;;
+  esac
+done
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)
+
+if [ -f "$SCRIPT_DIR/dist/cli.js" ]; then
+  exec node "$SCRIPT_DIR/dist/cli.js" "$@"
+fi
+
+exec pnpm exec tsx "$SCRIPT_DIR/src/cli.ts" "$@"

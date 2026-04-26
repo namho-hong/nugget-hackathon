@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.DS_Store
+docs/
+doc/
+TASKS.md
+task.md
+AGENTS.md
+agents.md
+README.md
+readme.md
