@@ -626,6 +626,8 @@ should not respawn the terminal surface currently running the CLI.
 Definition of Done:
 
 - [x] Current cmux workspace/surface context is detected before launching.
+- [x] Initial cmux tree lookup preserves caller env for accurate reentry
+  detection.
 - [x] Picker surface creation avoids reusing the current CLI surface.
 - [x] Already-selected cmux workspaces skip redundant `select-workspace`.
 - [x] Picker focus is best-effort after controller startup.
@@ -658,6 +660,9 @@ Manual verification requiring Matrix account and cmux:
 Current status:
 
 - Code path updated in `src/cmux/workspace-controller.ts`.
+- Initial `cmux tree --json --all` now preserves caller env so active
+  workspace reentry can identify the launching surface before later cmux control
+  commands clear caller-only env vars.
 - `pnpm build` passes.
 - `git diff --check` passes.
 - Manual live Matrix/cmux reentry verification still requires selecting a real
@@ -726,38 +731,38 @@ session/app-state, and terminal formatting behavior.
 
 Definition of Done:
 
-- [ ] `pnpm test` runs credential-free tests.
-- [ ] `pnpm build` passes.
-- [ ] `pnpm smoke` runs credential-free smoke checks.
-- [ ] Agent mention parser has unit coverage.
-- [ ] Slash parser has coverage for implemented commands and `/ask` syntax.
-- [ ] Matrix thread/relation helper behavior has fixture coverage.
-- [ ] Room/Space/DM classification has coverage where pure enough.
-- [ ] cmux tree parser and stale surface decision helpers have coverage.
-- [ ] Session/app-state validation has malformed and missing-field coverage.
-- [ ] Terminal sanitization/width helpers have coverage.
-- [ ] Manual verification docs separate no-credential, Matrix, cmux, and agent
+- [x] `pnpm test` runs credential-free tests.
+- [x] `pnpm build` passes.
+- [x] `pnpm smoke` runs credential-free smoke checks.
+- [x] Agent mention parser has unit coverage.
+- [x] Slash parser has coverage for implemented commands and `/ask` syntax.
+- [x] Matrix thread/relation helper behavior has fixture coverage.
+- [x] Room/Space/DM classification has coverage where pure enough.
+- [x] cmux tree parser and stale surface decision helpers have coverage.
+- [x] Session/app-state validation has malformed and missing-field coverage.
+- [x] Terminal sanitization/width helpers have coverage.
+- [x] Manual verification docs separate no-credential, Matrix, cmux, and agent
   checks.
-- [ ] Tests do not require Matrix credentials, cmux, browser SSO, or agent CLIs.
-- [ ] Working diff is reviewed for accidental unrelated edits.
+- [x] Tests do not require Matrix credentials, cmux, browser SSO, or agent CLIs.
+- [x] Working diff is reviewed for accidental unrelated edits.
 
 Checklist:
 
 - [x] Read `docs/tests-verification-plan.md`.
 - [x] Inspect existing parser, Matrix, cmux, store, terminal, and smoke code.
-- [ ] Choose test runner and add scripts.
-- [ ] Add fixtures directory.
-- [ ] Add or extract pure parser helpers.
-- [ ] Add agent mention parser tests.
-- [ ] Add slash parser tests.
-- [ ] Add Matrix event/thread helper tests.
-- [ ] Add room/Space/DM classification tests where practical.
-- [ ] Add cmux tree parser/stale decision tests.
-- [ ] Add session/app-state validation tests.
-- [ ] Add terminal formatting/sanitization tests.
-- [ ] Update manual verification docs.
-- [ ] Run verification commands.
-- [ ] Review working diff for accidental unrelated edits.
+- [x] Choose test runner and add scripts.
+- [x] Add fixtures directory.
+- [x] Add or extract pure parser helpers.
+- [x] Add agent mention parser tests.
+- [x] Add slash parser tests.
+- [x] Add Matrix event/thread helper tests.
+- [x] Add room/Space/DM classification tests where practical.
+- [x] Add cmux tree parser/stale decision tests.
+- [x] Add session/app-state validation tests.
+- [x] Add terminal formatting/sanitization tests.
+- [x] Update manual verification docs.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
 
 Verification Commands:
 
@@ -778,4 +783,16 @@ Manual verification requiring Matrix account, cmux, or agent CLIs:
 
 Current status:
 
-- Implementation in progress.
+Implementation is complete with local verification:
+
+- `pnpm build`
+- `pnpm test`
+- `pnpm smoke`
+- `git diff --check`
+
+The smoke script now runs Nugget commands with a temporary `HOME` so logout and
+state reset checks do not touch the user's real Matrix session files.
+
+Manual live Matrix/cmux/agent verification remains separate because automated
+tests intentionally do not require credentials, cmux, browser SSO, or agent
+CLIs.

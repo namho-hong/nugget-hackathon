@@ -73,8 +73,11 @@ export interface CmuxNotifyOptions {
 export class CmuxClient {
   private readonly binary = process.env.NUGGET_CMUX_BIN ?? process.env.CMUX_BIN ?? "cmux";
 
-  async tree(options: { all?: boolean } = {}): Promise<CmuxTree> {
-    const output = await this.run(["tree", "--json", ...(options.all ? ["--all"] : [])]);
+  async tree(options: { all?: boolean; preserveCallerEnv?: boolean } = {}): Promise<CmuxTree> {
+    const output = await this.run(
+      ["tree", "--json", ...(options.all ? ["--all"] : [])],
+      { preserveCallerEnv: options.preserveCallerEnv },
+    );
     return parseCmuxTreeJson(output);
   }
 
@@ -240,11 +243,14 @@ export class CmuxClient {
     ]);
   }
 
-  async run(args: string[]): Promise<string> {
+  async run(
+    args: string[],
+    options: { preserveCallerEnv?: boolean | undefined } = {},
+  ): Promise<string> {
     try {
       const { stdout } = await execFileAsync(this.binary, args, {
         encoding: "utf8",
-        env: cmuxControlEnv(),
+        env: options.preserveCallerEnv ? process.env : cmuxControlEnv(),
         maxBuffer: 10 * 1024 * 1024,
       });
 
@@ -348,7 +354,7 @@ export function findSurfacePane(
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function requireRef(output: string, prefix: string): string {

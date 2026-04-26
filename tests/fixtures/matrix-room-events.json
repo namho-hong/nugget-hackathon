@@ -1,0 +1,23 @@
+[
+  {
+    "event_id": "$message",
+    "origin_server_ts": 1000,
+    "room_id": "!room:example.org",
+    "sender": "@alice:example.org",
+    "type": "m.room.message",
+    "content": {
+      "body": "Hello\u001b[31m world",
+      "msgtype": "m.text"
+    }
+  },
+  {
+    "event_id": "$missing-body",
+    "origin_server_ts": 2000,
+    "room_id": "!room:example.org",
+    "sender": "@bob:example.org",
+    "type": "m.room.message",
+    "content": {
+      "msgtype": "m.text"
+    }
+  }
+]

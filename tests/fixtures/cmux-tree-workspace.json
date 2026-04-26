@@ -1,0 +1,43 @@
+{
+  "active": {
+    "workspace_ref": "workspace:1",
+    "pane_ref": "pane:1",
+    "surface_ref": "surface:1"
+  },
+  "windows": [
+    {
+      "workspaces": [
+        {
+          "ref": "workspace:1",
+          "title": "nugget: Product",
+          "description": "nugget-space:!space:example.org",
+          "selected": true,
+          "panes": [
+            {
+              "ref": "pane:1",
+              "selected_surface_ref": "surface:1",
+              "surfaces": [
+                {
+                  "ref": "surface:1",
+                  "title": "nugget workspace-controller !space:example.org",
+                  "type": "terminal"
+                }
+              ]
+            },
+            {
+              "ref": "pane:2",
+              "selected_surface_ref": "surface:2",
+              "surfaces": [
+                {
+                  "ref": "surface:2",
+                  "title": "nugget room !room:example.org",
+                  "type": "terminal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

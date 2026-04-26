@@ -1,0 +1,56 @@
+[
+  {
+    "event_id": "$root",
+    "origin_server_ts": 1000,
+    "room_id": "!room:example.org",
+    "sender": "@alice:example.org",
+    "type": "m.room.message",
+    "content": {
+      "body": "Root",
+      "msgtype": "m.text"
+    },
+    "unsigned": {
+      "m.relations": {
+        "m.thread": {
+          "count": 2
+        }
+      }
+    }
+  },
+  {
+    "event_id": "$reply-2",
+    "origin_server_ts": 3000,
+    "room_id": "!room:example.org",
+    "sender": "@bob:example.org",
+    "type": "m.room.message",
+    "content": {
+      "body": "Second reply",
+      "msgtype": "m.text",
+      "m.relates_to": {
+        "rel_type": "m.thread",
+        "event_id": "$root",
+        "m.in_reply_to": {
+          "event_id": "$reply-1"
+        }
+      }
+    }
+  },
+  {
+    "event_id": "$reply-1",
+    "origin_server_ts": 2000,
+    "room_id": "!room:example.org",
+    "sender": "@carol:example.org",
+    "type": "m.room.message",
+    "content": {
+      "body": "First reply",
+      "msgtype": "m.text",
+      "m.relates_to": {
+        "rel_type": "m.thread",
+        "event_id": "$root",
+        "m.in_reply_to": {
+          "event_id": "$root"
+        }
+      }
+    }
+  }
+]

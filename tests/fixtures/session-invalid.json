@@ -1,0 +1,4 @@
+{
+  "baseUrl": "https://matrix.example.org",
+  "accessToken": "secret"
+}

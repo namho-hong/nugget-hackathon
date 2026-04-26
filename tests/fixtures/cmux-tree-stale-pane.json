@@ -1,0 +1,26 @@
+{
+  "windows": [
+    {
+      "workspaces": [
+        {
+          "ref": "workspace:stale",
+          "title": "nugget: Legacy",
+          "description": "nugget-space:!space:example.org",
+          "panes": [
+            {
+              "ref": "pane:old",
+              "selected_surface_ref": "surface:old",
+              "surfaces": [
+                {
+                  "ref": "surface:old",
+                  "title": "nugget room !room:example.org",
+                  "type": "terminal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

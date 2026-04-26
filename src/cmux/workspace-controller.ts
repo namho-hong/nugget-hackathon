@@ -160,7 +160,7 @@ export class WorkspaceController {
 export async function launchWorkspace(workspace: MatrixWorkspace): Promise<void> {
   const cmux = new CmuxClient();
   const description = workspaceDescription(workspace.roomId);
-  let tree = await cmux.tree({ all: true });
+  let tree = await cmux.tree({ all: true, preserveCallerEnv: true });
   const initialContext = getCurrentCmuxContext(tree);
   let cmuxWorkspace = findNuggetWorkspace(tree, workspace.roomId, workspace.name);
 
