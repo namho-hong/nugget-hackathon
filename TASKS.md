@@ -668,6 +668,57 @@ Current status:
 - Manual live Matrix/cmux reentry verification still requires selecting a real
   joined Space from inside its active cmux workspace.
 
+## Follow-up: Workspace Controller Join Visibility
+
+Goal: A newly launched workspace controller should tolerate Matrix sync lag
+after accepting a Space invite instead of immediately failing that the Space is
+not joined.
+
+Definition of Done:
+
+- [x] Workspace controller waits briefly for the target Space to become visible
+  as a joined Space before validating child rooms.
+- [x] Direct `nugget workspace <spaceId>` launch uses the same joined-Space
+  visibility guard.
+- [x] Existing workspace invite accept flow still records and launches the
+  accepted workspace.
+- [x] `pnpm build` passes.
+- [x] Working diff is reviewed for unrelated edits.
+
+Checklist:
+
+- [x] Inspect workspace invite accept and controller launch flow.
+- [x] Identify the remaining race in the fresh controller process.
+- [x] Add a narrow joined-Space visibility wait helper.
+- [x] Use the helper in workspace launch/controller paths.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+Verification Commands:
+
+```sh
+pnpm build
+git diff --check
+```
+
+Manual verification requiring Matrix account and cmux:
+
+```sh
+# Accept a workspace invite, then confirm the spawned workspace-controller
+# opens the picker instead of printing "Space ... is not joined".
+./nugget
+```
+
+Current status:
+
+- Added `waitForJoinedSpace` and wired it into direct workspace open, workspace
+  invite accept, and workspace-controller startup.
+- `pnpm build` passes.
+- `git diff --check` passes.
+- Diff reviewed. This follow-up changed `src/cli.ts`, `src/matrix/spaces.ts`,
+  and `TASKS.md`; `src/cmux/workspace-controller.ts` was already dirty before
+  this follow-up.
+
 ## Follow-up: Workspace Invite Name Preservation
 
 Goal: Accepting or opening an invited Matrix Space should preserve the explicit

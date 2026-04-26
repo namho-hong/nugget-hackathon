@@ -1,5 +1,8 @@
 import {
+  ClientEvent,
   EventType,
+  RoomEvent,
+  SyncState,
   type MatrixClient,
 } from "matrix-js-sdk";
 import type { Room } from "matrix-js-sdk";
@@ -81,6 +84,101 @@ export function getPendingSpaceInvites(client: MatrixClient): PendingSpaceInvite
     .filter((room) => isSpaceRoom(room))
     .map((room) => pendingSpaceInviteSummary(room))
     .sort(compareRooms);
+}
+
+export async function waitForJoinedSpace(
+  client: MatrixClient,
+  spaceId: string,
+  timeoutMs = 30_000,
+): Promise<JoinedSpace> {
+  type JoinedSpaceWaitState =
+    | { kind: "ready"; room: Room; status: string }
+    | { kind: "waiting"; status: string };
+
+  const currentSpace = (): JoinedSpaceWaitState => {
+    const room = client.getRoom(spaceId);
+
+    if (!room) {
+      return { kind: "waiting", status: "missing" };
+    }
+
+    const membership = room.getMyMembership() ?? "unknown";
+
+    if (membership !== "join") {
+      return { kind: "waiting", status: membership };
+    }
+
+    if (!isSpaceRoom(room)) {
+      return { kind: "waiting", status: "join without Space state" };
+    }
+
+    return { kind: "ready", room, status: "ready" };
+  };
+
+  const initial = currentSpace();
+
+  if (initial.kind === "ready") {
+    return spaceSummary(initial.room);
+  }
+
+  return await new Promise<JoinedSpace>((resolve, reject) => {
+    let lastStatus = initial.status;
+    let lastState = client.getSyncState() ?? "none";
+    let lastError: Error | undefined;
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(
+        new Error(
+          `Timed out waiting for Space ${spaceId} to become a joined Space after ${Math.round(
+            timeoutMs / 1000,
+          )}s. Last status: ${lastStatus}; last sync state: ${lastState}${
+            lastError ? ` (${lastError.message})` : ""
+          }.`,
+        ),
+      );
+    }, timeoutMs);
+
+    timeout.unref();
+
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      client.off(ClientEvent.Sync, onSync);
+      client.off(RoomEvent.MyMembership, onMembership);
+    };
+
+    const check = (): void => {
+      const next = currentSpace();
+      lastStatus = next.status;
+
+      if (next.kind === "ready") {
+        cleanup();
+        resolve(spaceSummary(next.room));
+      }
+    };
+
+    const onSync = (
+      state: SyncState,
+      _previousState: SyncState | null,
+      data?: { error?: Error },
+    ): void => {
+      lastState = state;
+      lastError = data?.error;
+      check();
+    };
+
+    const onMembership = (room: Room, nextMembership: string): void => {
+      if (room.roomId !== spaceId) {
+        return;
+      }
+
+      lastStatus = nextMembership;
+      check();
+    };
+
+    client.on(ClientEvent.Sync, onSync);
+    client.on(RoomEvent.MyMembership, onMembership);
+    check();
+  });
 }
 
 export async function getSpaceChildRoomIds(

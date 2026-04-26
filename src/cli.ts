@@ -35,6 +35,7 @@ import {
   leaveRoom,
   loginWithSso,
   resolveRoomOrThrow,
+  waitForJoinedSpace,
   waitForRoomMembership,
   withMatrixClient,
   type LoginAction,
@@ -592,7 +593,7 @@ async function handleWorkspaceControllerCommand(args: string[]): Promise<Command
   );
 
   const result = await withMatrixClient(async (client) => {
-    const space = resolveJoinedSpace(client, spaceId);
+    const space = await waitForJoinedSpace(client, spaceId);
 
     await controller.hydrateOpenRooms(
       getJoinedSpaceRooms(client, spaceId).map((room) => room.roomId),
@@ -836,7 +837,7 @@ async function handleOpenRoom(roomId: string): Promise<CommandResult> {
 
 async function handleOpenWorkspace(spaceId: string): Promise<CommandResult> {
   return withMatrixClient(async (client) => {
-    const workspace = resolveJoinedSpace(client, spaceId);
+    const workspace = await waitForJoinedSpace(client, spaceId);
 
     try {
       await launchWorkspace(workspace);
@@ -1058,11 +1059,12 @@ async function handleAcceptWorkspaceInvite(spaceId: string): Promise<CommandResu
 
     const joinedSpace = await client.joinRoom(spaceId);
     await waitForRoomMembership(client, joinedSpace.roomId, "join");
+    const joinedSpaceSummary = await waitForJoinedSpace(client, joinedSpace.roomId);
     const syncedSpace = client.getRoom(joinedSpace.roomId) ?? joinedSpace;
     const stateName = await getSpaceStateName(client, syncedSpace.roomId);
     const workspace = {
       name: stateName ?? getSpaceDisplayName(syncedSpace, invite.name),
-      roomId: syncedSpace.roomId,
+      roomId: joinedSpaceSummary.roomId,
     };
 
     try {
