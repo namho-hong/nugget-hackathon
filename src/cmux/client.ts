@@ -358,7 +358,7 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error;
 }
 
-function cmuxFallbackMessage(error: { code?: string }): string {
+function cmuxFallbackMessage(error: { code?: string | undefined }): string {
   if (error.code === "ENOENT") {
     return "Install cmux or set NUGGET_CMUX_BIN/CMUX_BIN to a cmux executable; plain `nugget room <roomId>` still works without cmux.";
   }
