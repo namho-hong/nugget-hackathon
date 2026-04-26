@@ -115,6 +115,21 @@ Nugget은 이 대화 맥락을 터미널과 에이전트 실행 환경에 바로
 것입니다. Nugget은 에이전트에게 어떤 방/스레드에서 호출됐는지, 최근
 메시지는 무엇인지, 어떤 cmux surface 옆에서 실행되는지를 함께 넘깁니다.
 
+## 화면 예시
+
+특정 워크스페이스와 채널을 선택해 동료와 대화할 수 있습니다.
+
+![Nugget workspace picker](assets/workspace-picker.png)
+
+Slack/Discord처럼 메시지에서 스레드를 열어 대화를 나눌 수 있습니다.
+
+![Nugget thread pane](assets/thread-pane.png)
+
+대화창에서 `@codex`나 `@claude`를 불러 오른쪽 pane에서 업무를 시킬 수
+있습니다.
+
+![Nugget agent pane](assets/agent-pane.png)
+
 ## 지금 되는 것
 
 - Matrix SSO 로그인
@@ -164,21 +179,46 @@ nugget
 
 전역 설치 후에는 어느 디렉터리에서든 `nugget` 명령을 사용할 수 있습니다.
 
-## 자주 쓰는 명령
+## 기본 사용 흐름
+
+Nugget의 기본 사용 방식은 명령어를 계속 외워서 치는 것이 아니라,
+`nugget`으로 홈 화면을 열고 키보드로 이동하는 것입니다.
 
 ```sh
-./nugget login
-./nugget doctor
-./nugget create-workspace "Hackathon"
-./nugget create-room "demo" "<space-id>"
-./nugget workspace "<space-id>"
-./nugget open
-./nugget room "<room-id>"
-./nugget thread "<room-id>" "<thread-root-event-id>"
-./nugget send "<room-id>" "hello from the terminal"
+nugget
 ```
 
-room 안에서:
+홈 화면에서 할 수 있는 일:
+
+```text
+Recent Workspaces
+  -> 최근 열었던 워크스페이스로 이동
+  -> View all workspaces
+
+DMs
+  -> 최근 DM 열기
+
+Actions
+  -> Refresh
+  -> New workspace
+  -> New DM
+  -> Logout
+  -> Quit
+```
+
+조작:
+
+```text
+Up/Down 또는 j/k  이동
+Enter             선택
+r                 새로고침
+q                 종료
+```
+
+워크스페이스를 선택하면 room picker가 열리고, 그 안에서 채널을 선택해 대화를
+시작합니다. 방 안에서는 일반 채팅처럼 메시지를 입력하고 Enter를 누르면 됩니다.
+
+방 안에서 자주 쓰는 입력:
 
 ```text
 /help
@@ -187,6 +227,15 @@ room 안에서:
 @codex summarize the recent discussion
 @claude draft a reply based on this thread
 @hermes inspect the latest error context
+```
+
+직접 명령어는 데모 준비나 특정 방을 바로 열 때 쓰는 보조 수단입니다.
+
+```sh
+nugget doctor
+nugget room "<room-id>"
+nugget workspace "<space-id>"
+nugget send "<room-id>" "hello from the terminal"
 ```
 
 ## 기능별 사용 방법
@@ -218,10 +267,21 @@ nugget logout
 nugget
 ```
 
-홈 메뉴에서는 최근 워크스페이스, DM, 초대, 새 워크스페이스 생성, 새 DM
-생성을 선택할 수 있습니다.
+홈 메뉴가 Nugget의 시작점입니다. 최근 워크스페이스와 DM을 바로 열거나,
+`New workspace`, `New DM`, `Refresh`, `Logout`, `Quit` 같은 액션을 선택할 수
+있습니다.
 
 ### 3. 워크스페이스 만들기
+
+홈 메뉴에서:
+
+```text
+Actions -> New workspace
+```
+
+워크스페이스 이름을 입력하면 새 프로젝트 대화 공간이 만들어집니다.
+
+명령어로 만들 수도 있습니다:
 
 ```sh
 nugget create-workspace "Hackathon"
@@ -230,31 +290,51 @@ nugget create-workspace "Hackathon"
 Nugget에서 워크스페이스는 프로젝트 단위의 대화 공간입니다. 내부적으로는
 Matrix Space로 저장되고, cmux에서는 터미널 워크스페이스로 열립니다.
 
-워크스페이스를 열려면:
+워크스페이스를 열 때는 보통 홈 화면의 `Recent Workspaces`나
+`View all workspaces`에서 선택합니다. ID를 알고 있으면 명령어로도 열 수
+있습니다:
 
 ```sh
 nugget workspace "<space-id>"
 ```
 
-### 4. 방 만들기
+### 4. 워크스페이스에서 방 열기
 
-```sh
-nugget create-room "demo" "<space-id>"
+워크스페이스를 선택하면 room picker가 열립니다. 여기서 채널을 선택하면
+오른쪽 pane에 채팅방이 열립니다.
+
+```text
+Home
+  -> Recent Workspaces
+  -> workspace 선택
+  -> room picker
+  -> room 선택
 ```
 
-워크스페이스 안에 새 대화방을 만듭니다. 방을 직접 열려면:
+방 ID를 알고 있으면 직접 열 수도 있습니다:
 
 ```sh
 nugget room "<room-id>"
 ```
 
-방 ID를 모르면:
+### 5. 방 만들기
+
+현재 빌드에서는 새 room 생성은 명령어로 실행합니다.
+
+```sh
+nugget create-room "demo" "<space-id>"
+```
+
+워크스페이스 안에 새 대화방을 만든 뒤, 홈 화면에서 워크스페이스를 다시 열거나
+room picker를 새로고침하면 방을 선택할 수 있습니다.
+
+전체 room 목록에서 고르고 싶으면:
 
 ```sh
 nugget open
 ```
 
-### 5. 메시지 보내기
+### 6. 메시지 보내기
 
 채팅 화면에서 그냥 입력하고 Enter를 누르면 메시지가 전송됩니다.
 
@@ -264,7 +344,7 @@ nugget open
 nugget send "<room-id>" "hello from the terminal"
 ```
 
-### 6. 사람 초대하기
+### 7. 사람 초대하기
 
 채팅 화면 안에서:
 
@@ -278,15 +358,23 @@ nugget send "<room-id>" "hello from the terminal"
 nugget invite "<room-id>" "@user:server"
 ```
 
-### 7. DM 만들기
+### 8. DM 만들기
+
+홈 메뉴에서:
+
+```text
+Actions -> New DM
+```
+
+상대 Matrix ID를 입력하면 DM을 만들 수 있습니다.
+
+명령어로 만들 수도 있습니다:
 
 ```sh
 nugget create-dm "@user:server"
 ```
 
-홈 메뉴에서도 새 DM을 만들 수 있습니다.
-
-### 8. 스레드 열기
+### 9. 스레드 열기
 
 방 안에서:
 
@@ -303,7 +391,7 @@ nugget create-dm "@user:server"
 nugget thread "<room-id>" "<thread-root-event-id>"
 ```
 
-### 9. 에이전트 호출하기
+### 10. 에이전트 호출하기
 
 방이나 스레드 안에서:
 
@@ -316,7 +404,7 @@ nugget thread "<room-id>" "<thread-root-event-id>"
 Nugget은 해당 메시지를 채팅에 남기고, 동시에 로컬 에이전트 pane을 엽니다.
 에이전트에게는 최근 대화, room/thread 정보, 현재 cmux 위치가 함께 전달됩니다.
 
-### 10. 문제 진단하기
+### 11. 문제 진단하기
 
 ```sh
 nugget doctor
