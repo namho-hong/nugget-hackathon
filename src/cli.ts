@@ -4,7 +4,14 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { MsgType, type MatrixClient } from "matrix-js-sdk";
+import {
+  EventType,
+  MatrixEvent,
+  MsgType,
+  RoomEvent,
+  type MatrixClient,
+} from "matrix-js-sdk";
+import type { Room } from "matrix-js-sdk";
 
 import {
   addDirectRoomAccountData,
@@ -21,6 +28,7 @@ import {
   getSpaceChildRoomIds,
   loginWithSso,
   resolveRoomOrThrow,
+  waitForRoomMembership,
   withMatrixClient,
   type LoginAction,
 } from "./matrix/index.js";
@@ -32,6 +40,7 @@ import {
   openThreadBesideCurrentSurface,
 } from "./cmux/index.js";
 import { clearSession, loadSession, saveSession } from "./store/index.js";
+import { formatErrorMessage } from "./util/errors.js";
 import {
   openChatView,
   openThreadView,
@@ -403,10 +412,114 @@ async function handleWorkspaceControllerCommand(args: string[]): Promise<Command
       },
       onOpenRoom: (roomId) => controller.openRoom(roomId),
       title: `Workspace: ${space.name}`,
+      watchRoomActivity: (onActivity) =>
+        watchWorkspaceRoomActivity(client, spaceId, cmux, onActivity),
     });
   });
 
   return handleNavigationResult(result);
+}
+
+function watchWorkspaceRoomActivity(
+  client: MatrixClient,
+  spaceId: string,
+  cmux: CmuxClient,
+  onActivity: (roomId: string) => void,
+): () => void {
+  const localUserId = client.getUserId();
+  const rooms = getJoinedSpaceRooms(client, spaceId)
+    .map((room) => client.getRoom(room.roomId))
+    .filter((room): room is Room => room !== null);
+  const seenEventIds = new Set(
+    rooms.flatMap((room) =>
+      room
+        .getLiveTimeline()
+        .getEvents()
+        .map((event) => event.getId())
+        .filter((eventId): eventId is string => typeof eventId === "string"),
+    ),
+  );
+
+  const onTimeline = (
+    event: MatrixEvent,
+    eventRoom: Room | undefined,
+    toStartOfTimeline: boolean | undefined,
+    removed: boolean | undefined,
+  ): void => {
+    const roomId = eventRoom?.roomId;
+
+    if (removed || toStartOfTimeline || !roomId || !isWorkspaceActivityEvent(event)) {
+      return;
+    }
+
+    const eventId = event.getId();
+
+    if (eventId) {
+      if (seenEventIds.has(eventId)) {
+        return;
+      }
+
+      seenEventIds.add(eventId);
+    }
+
+    if (!isCurrentWorkspaceRoom(client, spaceId, roomId)) {
+      return;
+    }
+
+    onActivity(roomId);
+
+    if (event.getSender() === localUserId) {
+      return;
+    }
+
+    const body = getMessageBody(event);
+
+    if (!body || !eventRoom) {
+      return;
+    }
+
+    void cmux.notify({
+      title: getRoomDisplayName(eventRoom),
+      body: `${event.getSender() ?? "Someone"}: ${body}`,
+    });
+  };
+
+  for (const room of rooms) {
+    room.on(RoomEvent.Timeline, onTimeline);
+  }
+
+  return () => {
+    for (const room of rooms) {
+      room.off(RoomEvent.Timeline, onTimeline);
+    }
+  };
+}
+
+function isWorkspaceActivityEvent(event: MatrixEvent): boolean {
+  return getMessageBody(event) !== null;
+}
+
+function isCurrentWorkspaceRoom(
+  client: MatrixClient,
+  spaceId: string,
+  roomId: string,
+): boolean {
+  try {
+    return getJoinedSpaceRooms(client, spaceId).some((room) => room.roomId === roomId);
+  } catch {
+    return false;
+  }
+}
+
+function getMessageBody(event: MatrixEvent): string | null {
+  if (event.getType() !== EventType.RoomMessage) {
+    return null;
+  }
+
+  const content = event.getContent<Record<string, unknown>>();
+  const body = typeof content.body === "string" ? content.body.trim() : "";
+
+  return body.length > 0 ? body : null;
 }
 
 async function handleOpenCommand(args: string[]): Promise<CommandResult> {
@@ -488,10 +601,15 @@ async function handleSendCommand(args: string[]): Promise<CommandResult> {
 
   return withMatrixClient(async (client) => {
     resolveRoomOrThrow(client, roomId);
-    await client.sendMessage(roomId, {
-      body: message,
-      msgtype: MsgType.Text,
-    });
+
+    try {
+      await client.sendMessage(roomId, {
+        body: message,
+        msgtype: MsgType.Text,
+      });
+    } catch (error) {
+      throw new Error(`Could not send message to room ${roomId}: ${formatError(error)}`);
+    }
 
     return {
       exitCode: 0,
@@ -551,7 +669,7 @@ async function handleCreateWorkspace(name: string): Promise<CommandResult> {
     output:
       `Created workspace: ${created.name}\n` +
       `Space ID: ${created.roomId}\n\n` +
-      "Workspace opening is planned in the cmux workspace phase.\n",
+      `Open it with: nugget workspace ${created.roomId}\n`,
     stream: "stdout",
   };
 }
@@ -611,7 +729,7 @@ async function handleCreateMatrixRoom(
       `Created room: ${created.name}\n` +
       `Room ID: ${created.roomId}\n` +
       `${spaceId ? `Linked Space ID: ${spaceId}\n` : ""}\n` +
-      "Room opening is planned in the cmux workspace phase.\n",
+      `Open it with: nugget room ${created.roomId}\n`,
     stream: "stdout",
   };
 }
@@ -704,9 +822,12 @@ async function handleAcceptWorkspaceInvite(spaceId: string): Promise<CommandResu
     }
 
     const joinedSpace = await client.joinRoom(spaceId);
+    await waitForRoomMembership(client, joinedSpace.roomId, "join");
+    const syncedSpace = client.getRoom(joinedSpace.roomId) ?? joinedSpace;
+
     await launchWorkspace({
-      name: getRoomDisplayName(joinedSpace),
-      roomId: joinedSpace.roomId,
+      name: getRoomDisplayName(syncedSpace),
+      roomId: syncedSpace.roomId,
     });
 
     return {
@@ -829,5 +950,5 @@ try {
 }
 
 function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return formatErrorMessage(error);
 }

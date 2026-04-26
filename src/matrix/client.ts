@@ -1,9 +1,11 @@
 import {
   ClientEvent,
   createClient,
+  RoomEvent,
   type MatrixClient,
   SyncState,
 } from "matrix-js-sdk";
+import type { Room } from "matrix-js-sdk";
 
 import { loadSession, saveSession, type MatrixSession } from "../store/index.js";
 import { silentMatrixLogger, withSuppressedMatrixConsole } from "./logger.js";
@@ -82,7 +84,13 @@ export async function startAndSyncClient(
 
       if (state === SyncState.Error) {
         cleanup();
-        reject(data?.error ?? new Error("Matrix sync failed before becoming ready."));
+        reject(
+          new Error(
+            `Matrix initial sync failed before becoming ready. Last sync state: ${lastState}${
+              data?.error ? ` (${data.error.message})` : ""
+            }.`,
+          ),
+        );
       }
     };
 
@@ -92,6 +100,79 @@ export async function startAndSyncClient(
       cleanup();
       reject(error);
     });
+  });
+}
+
+export async function waitForRoomMembership(
+  client: MatrixClient,
+  roomId: string,
+  membership: string,
+  timeoutMs = 30_000,
+): Promise<void> {
+  const currentMembership = (): string => {
+    return client.getRoom(roomId)?.getMyMembership() ?? "missing";
+  };
+
+  if (currentMembership() === membership) {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    let lastMembership = currentMembership();
+    let lastState = client.getSyncState() ?? "none";
+    let lastError: Error | undefined;
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(
+        new Error(
+          `Timed out waiting for room ${roomId} membership to become ${membership} after ${Math.round(
+            timeoutMs / 1000,
+          )}s. Last membership: ${lastMembership}; last sync state: ${lastState}${
+            lastError ? ` (${lastError.message})` : ""
+          }.`,
+        ),
+      );
+    }, timeoutMs);
+
+    timeout.unref();
+
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      client.off(ClientEvent.Sync, onSync);
+      client.off(RoomEvent.MyMembership, onMembership);
+    };
+
+    const check = (): void => {
+      lastMembership = currentMembership();
+
+      if (lastMembership === membership) {
+        cleanup();
+        resolve();
+      }
+    };
+
+    const onSync = (
+      state: SyncState,
+      _previousState: SyncState | null,
+      data?: { error?: Error },
+    ): void => {
+      lastState = state;
+      lastError = data?.error;
+      check();
+    };
+
+    const onMembership = (room: Room, nextMembership: string): void => {
+      if (room.roomId !== roomId) {
+        return;
+      }
+
+      lastMembership = nextMembership;
+      check();
+    };
+
+    client.on(ClientEvent.Sync, onSync);
+    client.on(RoomEvent.MyMembership, onMembership);
+    check();
   });
 }
 

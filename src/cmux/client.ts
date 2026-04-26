@@ -65,6 +65,11 @@ export interface CmuxPaneSurfaceRef {
   surfaceRef: string;
 }
 
+export interface CmuxNotifyOptions {
+  title: string;
+  body: string;
+}
+
 export class CmuxClient {
   private readonly binary = process.env.NUGGET_CMUX_BIN ?? process.env.CMUX_BIN ?? "cmux";
 
@@ -195,6 +200,25 @@ export class CmuxClient {
     ]);
   }
 
+  async notify(options: CmuxNotifyOptions): Promise<void> {
+    if (!isRunningInCmux()) {
+      return;
+    }
+
+    try {
+      await this.run([
+        "notify",
+        "--title",
+        sanitizeNotificationText(options.title, 80),
+        "--body",
+        sanitizeNotificationText(options.body, 240),
+      ]);
+    } catch {
+      // Notifications are best-effort; chat and picker flows must keep working
+      // when cmux is missing, old, or temporarily unavailable.
+    }
+  }
+
   async resizePane(options: {
     workspaceRef: string;
     paneRef: string;
@@ -223,10 +247,18 @@ export class CmuxClient {
 
       return stdout;
     } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") {
+        throw new Error(
+          `cmux ${args.join(" ")} failed: ${error.message}. ${cmuxFallbackMessage(error)}`,
+        );
+      }
+
       if (isExecError(error)) {
         const stderr = error.stderr.trim();
         const message = stderr.length > 0 ? stderr : error.message;
-        throw new Error(`cmux ${args.join(" ")} failed: ${message}`);
+        throw new Error(
+          `cmux ${args.join(" ")} failed: ${message}. ${cmuxFallbackMessage(error)}`,
+        );
       }
 
       throw error;
@@ -252,6 +284,29 @@ function cmuxControlEnv(): NodeJS.ProcessEnv {
   }
 
   return env;
+}
+
+function isRunningInCmux(): boolean {
+  return Array.from(CMUX_CALLER_ENV).some((key) => process.env[key]);
+}
+
+function sanitizeNotificationText(value: string, maxLength: number): string {
+  const clean = value
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
+    .replace(/[\u202a-\u202e\u2066-\u2069]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (clean.length <= maxLength) {
+    return clean;
+  }
+
+  if (maxLength <= 3) {
+    return clean.slice(0, maxLength);
+  }
+
+  return `${clean.slice(0, maxLength - 3)}...`;
 }
 
 export function getWorkspaces(tree: CmuxTree): CmuxWorkspace[] {
@@ -295,6 +350,18 @@ function requireRef(output: string, prefix: string): string {
 
 function isExecError(
   error: unknown,
-): error is Error & { stderr: string; stdout: string } {
+): error is Error & { code?: string; stderr: string; stdout: string } {
   return error instanceof Error && "stderr" in error && "stdout" in error;
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error;
+}
+
+function cmuxFallbackMessage(error: { code?: string }): string {
+  if (error.code === "ENOENT") {
+    return "Install cmux or set NUGGET_CMUX_BIN/CMUX_BIN to a cmux executable; plain `nugget room <roomId>` still works without cmux.";
+  }
+
+  return "Check that cmux is running and retry, or open the room directly with `nugget room <roomId>`.";
 }

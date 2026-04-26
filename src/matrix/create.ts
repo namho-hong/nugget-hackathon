@@ -7,6 +7,7 @@ import {
   type MatrixClient,
 } from "matrix-js-sdk";
 
+import { formatErrorMessage } from "../util/errors.js";
 import { findJoinedDirectRoomForUser } from "./rooms.js";
 
 export interface CreatedRoom {
@@ -31,12 +32,18 @@ export async function createSpace(
 ): Promise<CreatedRoom> {
   const cleanName = validateRoomName(name, "workspace name");
 
-  const response = await client.createRoom({
-    creation_content: { type: RoomType.Space },
-    name: cleanName,
-    preset: Preset.PrivateChat,
-    visibility: Visibility.Private,
-  });
+  let response: { room_id: string };
+
+  try {
+    response = await client.createRoom({
+      creation_content: { type: RoomType.Space },
+      name: cleanName,
+      preset: Preset.PrivateChat,
+      visibility: Visibility.Private,
+    });
+  } catch (error) {
+    throw new Error(`Could not create Matrix Space "${cleanName}": ${formatError(error)}`);
+  }
 
   await waitForRoom(client, response.room_id, {
     description: `created Space ${response.room_id}`,
@@ -51,11 +58,20 @@ export async function createRoom(
 ): Promise<CreatedRoom> {
   const cleanName = validateRoomName(options.name, "room name");
 
-  const response = await client.createRoom({
-    name: cleanName,
-    preset: Preset.PrivateChat,
-    visibility: Visibility.Private,
-  });
+  let response: { room_id: string };
+
+  try {
+    response = await client.createRoom({
+      name: cleanName,
+      preset: Preset.PrivateChat,
+      visibility: Visibility.Private,
+    });
+  } catch (error) {
+    const spaceContext = options.spaceId ? ` for Space ${options.spaceId}` : "";
+    throw new Error(
+      `Could not create Matrix room "${cleanName}"${spaceContext}: ${formatError(error)}`,
+    );
+  }
 
   const createdRoom = { name: cleanName, roomId: response.room_id };
 
@@ -87,12 +103,18 @@ export async function createDirectRoom(
     return { name: existingRoom.name, roomId: existingRoom.roomId };
   }
 
-  const response = await client.createRoom({
-    invite: [targetUserId],
-    is_direct: true,
-    preset: Preset.PrivateChat,
-    visibility: Visibility.Private,
-  });
+  let response: { room_id: string };
+
+  try {
+    response = await client.createRoom({
+      invite: [targetUserId],
+      is_direct: true,
+      preset: Preset.PrivateChat,
+      visibility: Visibility.Private,
+    });
+  } catch (error) {
+    throw new Error(`Could not create DM and invite ${targetUserId}: ${formatError(error)}`);
+  }
 
   const roomId = response.room_id;
 
@@ -120,15 +142,21 @@ export async function linkRoomToSpace(
   const childVia = options.childVia ?? [deriveVia(roomId)];
   const parentVia = options.parentVia ?? [deriveVia(spaceId)];
 
-  await client.sendStateEvent(
-    spaceId,
-    EventType.SpaceChild,
-    {
-      suggested: options.suggested ?? true,
-      via: childVia,
-    },
-    roomId,
-  );
+  try {
+    await client.sendStateEvent(
+      spaceId,
+      EventType.SpaceChild,
+      {
+        suggested: options.suggested ?? true,
+        via: childVia,
+      },
+      roomId,
+    );
+  } catch (error) {
+    throw new Error(
+      `Could not link room ${roomId} to Space ${spaceId} with m.space.child: ${formatError(error)}`,
+    );
+  }
 
   try {
     await client.sendStateEvent(
@@ -258,5 +286,5 @@ function validateUserId(userId: string): string {
 }
 
 function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return formatErrorMessage(error);
 }

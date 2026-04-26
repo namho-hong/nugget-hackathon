@@ -2,6 +2,7 @@ import { emitKeypressEvents } from "node:readline";
 import type { ReadStream, WriteStream } from "node:tty";
 
 import type { JoinedRoom } from "../matrix/index.js";
+import { truncateDisplayText } from "../util/terminal.js";
 
 interface RoomPickerIo {
   input: ReadStream;
@@ -42,15 +43,31 @@ export async function selectJoinedRoom(
 
   try {
     return await new Promise<JoinedRoomSelection>((resolve) => {
+      let closed = false;
+
       const render = (): void => {
+        if (closed) {
+          return;
+        }
+
         io.output.write(
           `\x1b[2J\x1b[H${renderRoomPicker(rooms, selectedIndex, io.output.columns ?? 80)}`,
         );
       };
 
       const cleanup = (): void => {
+        if (closed) {
+          return;
+        }
+
+        closed = true;
         io.input.off("keypress", onKeypress);
-        io.input.setRawMode(false);
+        io.output.off("resize", render);
+
+        if (io.input.isRaw) {
+          io.input.setRawMode(false);
+        }
+
         io.output.write("\x1b[?25h\x1b[0m");
       };
 
@@ -93,6 +110,7 @@ export async function selectJoinedRoom(
       };
 
       io.input.on("keypress", onKeypress);
+      io.output.on("resize", render);
       render();
     });
   } finally {
@@ -133,15 +151,7 @@ function pickerOptions(rooms: readonly JoinedRoom[]): PickerOption[] {
 }
 
 function truncate(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-
-  if (maxLength <= 3) {
-    return value.slice(0, maxLength);
-  }
-
-  return `${value.slice(0, maxLength - 3)}...`;
+  return truncateDisplayText(value, maxLength);
 }
 
 interface KeypressEvent {

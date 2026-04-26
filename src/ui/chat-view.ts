@@ -11,6 +11,7 @@ import {
 } from "matrix-js-sdk";
 import type { Room } from "matrix-js-sdk";
 
+import { CmuxClient } from "../cmux/index.js";
 import {
   getBundledThreadReplyCount,
   getRoomDisplayName,
@@ -21,6 +22,7 @@ import {
   resolveRoomOrThrow,
   sendThreadMessage,
 } from "../matrix/index.js";
+import { formatErrorMessage } from "../util/errors.js";
 
 const HISTORY_BATCH_SIZE = 100;
 const MAX_HISTORY_BATCHES = 1000;
@@ -185,6 +187,8 @@ async function runInteractiveChat(
   mode: ChatViewMode,
 ): Promise<ChatViewResult> {
   const threadEvents = mode.type === "thread" ? [...mode.initialThreadEvents] : [];
+  const cmux = new CmuxClient();
+  const localUserId = client.getUserId() ?? room.myUserId;
   const seenEventIds = new Set(
     (mode.type === "thread" ? threadEvents : room.getLiveTimeline().getEvents())
       .map((event) => event.getId())
@@ -199,6 +203,8 @@ async function runInteractiveChat(
   let selectedEventId: string | null = null;
   let syncNoticeActive = false;
   let closed = false;
+  let newMessagesBelow = 0;
+  let lastHistoryLineCount = 0;
 
   if (mode.type === "thread" && mode.initialNotice) {
     notice = mode.initialNotice;
@@ -230,13 +236,25 @@ async function runInteractiveChat(
       const width = Math.max(30, process.stdout.columns ?? 80);
       const entries = getCurrentEntries();
       const historyLines = renderHistory(entries, width, selectionMode ? selectedEventId : null);
-      const slashLines = renderSlashHelp(inputBuffer, width);
-      const visibleHistoryHeight = Math.max(
+      const slashLines = renderSlashHelp(inputBuffer, width, mode);
+      let markerLines = renderNewMessagesMarker(newMessagesBelow, width);
+      let visibleHistoryHeight = Math.max(
         1,
-        height - HEADER_LINES - slashLines.length - COMPOSER_LINES,
+        height - HEADER_LINES - markerLines.length - slashLines.length - COMPOSER_LINES,
       );
-      const maxScroll = Math.max(0, historyLines.length - visibleHistoryHeight);
+      let maxScroll = Math.max(0, historyLines.length - visibleHistoryHeight);
       scrollOffsetFromBottom = Math.min(scrollOffsetFromBottom, maxScroll);
+
+      if (scrollOffsetFromBottom === 0 && newMessagesBelow > 0) {
+        newMessagesBelow = 0;
+        markerLines = [];
+        visibleHistoryHeight = Math.max(
+          1,
+          height - HEADER_LINES - slashLines.length - COMPOSER_LINES,
+        );
+        maxScroll = Math.max(0, historyLines.length - visibleHistoryHeight);
+        scrollOffsetFromBottom = Math.min(scrollOffsetFromBottom, maxScroll);
+      }
 
       const end = historyLines.length - scrollOffsetFromBottom;
       const start = Math.max(0, end - visibleHistoryHeight);
@@ -250,10 +268,12 @@ async function runInteractiveChat(
       );
       const visibleInput = sliceDisplayTextFromEnd(inputBuffer, Math.max(1, width - 3));
       const composer = renderComposer(visibleInput, submitting, width, selectionMode);
-      const frame = [...header, ...paddedHistory, ...slashLines, ...composer];
-      const cursorRow = header.length + paddedHistory.length + slashLines.length + 2;
+      const frame = [...header, ...paddedHistory, ...markerLines, ...slashLines, ...composer];
+      const cursorRow =
+        header.length + paddedHistory.length + markerLines.length + slashLines.length + 2;
       const cursorColumn = Math.min(getDisplayWidth(`> ${visibleInput}`) + 1, width);
 
+      lastHistoryLineCount = historyLines.length;
       process.stdout.write("\x1b[?25l\x1b[0m\x1b[H\x1b[2J");
       process.stdout.write(frame.join("\n"));
       process.stdout.write(`\x1b[${cursorRow};${cursorColumn}H\x1b[?25h`);
@@ -299,11 +319,17 @@ async function runInteractiveChat(
 
       if (text === "/help") {
         inputBuffer = "";
-        setNotice("Commands: /help, /select, /invite @user:server, /home, /quit, /exit");
+        setNotice(`Commands: ${slashCommands(mode).join(", ")}`);
         return;
       }
 
       if (text === "/select") {
+        if (!canOpenThreads(mode)) {
+          inputBuffer = "";
+          setNotice("Selection is unavailable in this thread view.");
+          return;
+        }
+
         const messages = getSelectableMessages(getCurrentEntries());
 
         inputBuffer = "";
@@ -336,7 +362,7 @@ async function runInteractiveChat(
           await client.invite(room.roomId, userId);
           setNotice(`Invited ${userId}.`);
         } catch (error) {
-          setNotice(formatError(error));
+          setNotice(`Invite failed for ${userId} in ${room.roomId}: ${formatError(error)}`);
         } finally {
           submitting = false;
           render();
@@ -377,7 +403,7 @@ async function runInteractiveChat(
           setNotice("Sent.");
         }
       } catch (error) {
-        setNotice(formatError(error));
+        setNotice(`Send failed in ${room.roomId}: ${formatError(error)}`);
       } finally {
         submitting = false;
         render();
@@ -424,7 +450,9 @@ async function runInteractiveChat(
         selectedEventId = null;
         setNotice(`Opened thread ${threadRootEventId}.`);
       } catch (error) {
-        setNotice(formatError(error));
+        setNotice(
+          `Could not open thread ${threadRootEventId} from room ${room.roomId}: ${formatError(error)}`,
+        );
       } finally {
         submitting = false;
         render();
@@ -451,16 +479,43 @@ async function runInteractiveChat(
         seenEventIds.add(eventId);
       }
 
+      const wasAtBottom = scrollOffsetFromBottom === 0;
+      const beforeLineCount = lastHistoryLineCount;
+      let visibleIncoming = mode.type === "room" && !isThreadReply(event);
+
       if (mode.type === "thread") {
         if (!shouldShowInThread(event, mode.threadRootEventId)) {
           return;
         }
 
+        visibleIncoming = true;
         threadEvents.push(event);
         threadEvents.sort((a, b) => a.getTs() - b.getTs());
       }
 
-      scrollOffsetFromBottom = 0;
+      if (visibleIncoming && isIncomingMessageEvent(event)) {
+        if (wasAtBottom) {
+          scrollOffsetFromBottom = 0;
+        } else {
+          const width = Math.max(30, process.stdout.columns ?? 80);
+          const afterLineCount = renderHistory(
+            getCurrentEntries(),
+            width,
+            selectionMode ? selectedEventId : null,
+          ).length;
+          scrollOffsetFromBottom += Math.max(1, afterLineCount - beforeLineCount);
+          newMessagesBelow += 1;
+        }
+
+        if (!isLocalEvent(event, localUserId)) {
+          const notification = formatIncomingNotification(room, event, mode);
+
+          if (notification) {
+            void cmux.notify(notification);
+          }
+        }
+      }
+
       render();
     };
 
@@ -573,6 +628,7 @@ async function runInteractiveChat(
 
       if (key.name === "end") {
         scrollOffsetFromBottom = 0;
+        newMessagesBelow = 0;
         render();
         return;
       }
@@ -589,8 +645,12 @@ async function runInteractiveChat(
 
     const getVisibleHistoryHeight = (): number => {
       const height = Math.max(10, process.stdout.rows ?? 24);
-      const slashLineCount = renderSlashHelp(inputBuffer, process.stdout.columns ?? 80).length;
-      return Math.max(1, height - HEADER_LINES - slashLineCount - COMPOSER_LINES);
+      const slashLineCount = renderSlashHelp(inputBuffer, process.stdout.columns ?? 80, mode).length;
+      const markerLineCount = newMessagesBelow > 0 ? 1 : 0;
+      return Math.max(
+        1,
+        height - HEADER_LINES - markerLineCount - slashLineCount - COMPOSER_LINES,
+      );
     };
 
     const getCurrentEntries = (): HistoryEntry[] => {
@@ -714,17 +774,38 @@ function renderMessage(
   });
 }
 
-function renderSlashHelp(inputBuffer: string, width: number): string[] {
+function renderSlashHelp(inputBuffer: string, width: number, mode: ChatViewMode): string[] {
   if (!inputBuffer.startsWith("/")) {
     return [];
   }
 
   return [
-    fitDisplayText(
-      `${DIM}/help  /select  /invite @user:server  /home  /quit  /exit${ANSI_RESET}`,
-      width,
-    ),
+    fitDisplayText(`${DIM}${slashCommands(mode).join("  ")}${ANSI_RESET}`, width),
   ];
+}
+
+function renderNewMessagesMarker(count: number, width: number): string[] {
+  if (count <= 0) {
+    return [];
+  }
+
+  const label = count === 1 ? "New messages below" : `${count} new messages below`;
+  return [centerText(label, width)];
+}
+
+function slashCommands(mode: ChatViewMode): string[] {
+  return [
+    "/help",
+    ...(canOpenThreads(mode) ? ["/select"] : []),
+    "/invite @user:server",
+    "/home",
+    "/quit",
+    "/exit",
+  ];
+}
+
+function canOpenThreads(mode: ChatViewMode): boolean {
+  return mode.type === "room" && !!mode.onOpenThread;
 }
 
 function renderComposer(
@@ -828,6 +909,46 @@ function buildHistoryEntry(
   }
 
   return null;
+}
+
+function isIncomingMessageEvent(event: MatrixEvent): boolean {
+  return getMessageBody(event) !== null;
+}
+
+function isLocalEvent(event: MatrixEvent, localUserId: string | null | undefined): boolean {
+  return !!localUserId && event.getSender() === localUserId;
+}
+
+function formatIncomingNotification(
+  room: Room,
+  event: MatrixEvent,
+  mode: ChatViewMode,
+): { title: string; body: string } | null {
+  const body = getMessageBody(event);
+
+  if (!body) {
+    return null;
+  }
+
+  const roomName = getRoomDisplayName(room);
+  const title = mode.type === "thread" ? `${roomName} thread` : roomName;
+  const sender = getSenderLabel(room, event.getSender() ?? "");
+
+  return {
+    title,
+    body: `${sender}: ${body}`,
+  };
+}
+
+function getMessageBody(event: MatrixEvent): string | null {
+  if (event.getType() !== EventType.RoomMessage) {
+    return null;
+  }
+
+  const content = event.getContent<Record<string, unknown>>();
+  const body = typeof content.body === "string" ? sanitizeForTerminal(content.body) : "";
+
+  return body.trim().length > 0 ? body : null;
 }
 
 function getThreadReplyCounts(events: readonly MatrixEvent[]): Map<string, number> {
@@ -1175,7 +1296,7 @@ function getCharDisplayWidth(char: string): number {
 }
 
 function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return formatErrorMessage(error);
 }
 
 interface KeypressEvent {

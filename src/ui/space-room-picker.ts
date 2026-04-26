@@ -2,6 +2,7 @@ import { emitKeypressEvents } from "node:readline";
 import type { ReadStream, WriteStream } from "node:tty";
 
 import type { JoinedRoom } from "../matrix/index.js";
+import { truncateDisplayText } from "../util/terminal.js";
 import { promptRequiredNavigation } from "./prompts.js";
 
 interface SpaceRoomPickerIo {
@@ -36,6 +37,7 @@ export async function runSpaceRoomPicker(options: {
   loadRooms: () => Promise<readonly JoinedRoom[]> | readonly JoinedRoom[];
   onOpenRoom: (roomId: string) => Promise<void>;
   onInviteUser?: (userId: string) => Promise<void>;
+  watchRoomActivity?: (onActivity: (roomId: string) => void) => () => void;
   io?: SpaceRoomPickerIo;
 }): Promise<SpaceRoomPickerResult> {
   const io = options.io ?? { input: process.stdin, output: process.stdout };
@@ -53,6 +55,9 @@ export async function runSpaceRoomPicker(options: {
   let selectedIndex = 0;
   let notice = "";
   let ignoreInitialEnter = process.env.NUGGET_IGNORE_INITIAL_ENTER === "1";
+  let closed = false;
+  const activeRoomIds = new Set<string>();
+  let stopWatchingActivity: (() => void) | null = null;
 
   emitKeypressEvents(io.input);
   io.input.resume();
@@ -60,6 +65,10 @@ export async function runSpaceRoomPicker(options: {
   io.output.write("\x1b[?25l");
 
   const render = (): void => {
+    if (closed) {
+      return;
+    }
+
     const selectableCount = selectableOptions(rooms, canInviteUser).length;
     selectedIndex = selectableCount === 0 ? 0 : selectedIndex % selectableCount;
     io.output.write(
@@ -70,6 +79,7 @@ export async function runSpaceRoomPicker(options: {
         io.output.columns ?? 80,
         notice,
         canInviteUser,
+        activeRoomIds,
       )}`,
     );
   };
@@ -77,14 +87,27 @@ export async function runSpaceRoomPicker(options: {
   let resolveDone: ((result: SpaceRoomPickerResult) => void) | null = null;
 
   let cleanup = (result: SpaceRoomPickerResult): void => {
+    if (closed) {
+      return;
+    }
+
+    closed = true;
+    stopWatchingActivity?.();
+    stopWatchingActivity = null;
     io.input.off("keypress", onKeypress);
-    io.input.setRawMode(false);
+    io.output.off("resize", render);
+
+    if (io.input.isRaw) {
+      io.input.setRawMode(false);
+    }
+
     io.output.write("\x1b[?25h\x1b[0m\n");
     resolveDone?.(result);
   };
 
   const refresh = async (): Promise<void> => {
     rooms = await options.loadRooms();
+    pruneActivity(activeRoomIds, rooms);
     render();
   };
 
@@ -93,6 +116,10 @@ export async function runSpaceRoomPicker(options: {
   };
 
   const onKeypress = async (_text: string, key: KeypressEvent): Promise<void> => {
+    if (closed) {
+      return;
+    }
+
     if (key.ctrl && key.name === "c") {
       finish({ type: "quit" });
       return;
@@ -193,6 +220,7 @@ export async function runSpaceRoomPicker(options: {
     }
 
     notice = `Opening ${selected.label}...`;
+    activeRoomIds.delete(selected.action.roomId);
     render();
 
     try {
@@ -205,11 +233,20 @@ export async function runSpaceRoomPicker(options: {
     render();
   };
 
-  io.input.on("keypress", onKeypress);
-  render();
-
   return await new Promise<SpaceRoomPickerResult>((resolve) => {
     resolveDone = resolve;
+    io.input.on("keypress", onKeypress);
+    io.output.on("resize", render);
+    stopWatchingActivity =
+      options.watchRoomActivity?.((roomId) => {
+        if (closed || !rooms.some((room) => room.roomId === roomId)) {
+          return;
+        }
+
+        activeRoomIds.add(roomId);
+        render();
+      }) ?? null;
+    render();
   });
 }
 
@@ -220,6 +257,7 @@ function renderPicker(
   columns: number,
   notice = "",
   canInviteUser = false,
+  activeRoomIds: ReadonlySet<string> = new Set(),
 ): string {
   const width = Math.max(20, columns);
   const lines = [title, ""];
@@ -234,7 +272,7 @@ function renderPicker(
       optionIndex += 1;
     }
 
-    lines.push(`${prefix}${truncate(option.label, width - 4)}`);
+    lines.push(`${prefix}${truncate(optionLabel(option, activeRoomIds), width - 4)}`);
   }
 
   if (notice.length > 0) {
@@ -277,6 +315,24 @@ function pickerOptions(
   ];
 }
 
+function optionLabel(option: AnyPickerOption, activeRoomIds: ReadonlySet<string>): string {
+  if (option.disabled || option.action.type !== "open-room") {
+    return option.label;
+  }
+
+  return activeRoomIds.has(option.action.roomId) ? `* ${option.label}` : option.label;
+}
+
+function pruneActivity(activeRoomIds: Set<string>, rooms: readonly JoinedRoom[]): void {
+  const roomIds = new Set(rooms.map((room) => room.roomId));
+
+  for (const roomId of activeRoomIds) {
+    if (!roomIds.has(roomId)) {
+      activeRoomIds.delete(roomId);
+    }
+  }
+}
+
 async function promptForInviteUserId(
   io: SpaceRoomPickerIo,
   onKeypress: (text: string, key: KeypressEvent) => Promise<void>,
@@ -305,15 +361,7 @@ function isMatrixUserId(value: string): boolean {
 }
 
 function truncate(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-
-  if (maxLength <= 3) {
-    return value.slice(0, maxLength);
-  }
-
-  return `${value.slice(0, maxLength - 3)}...`;
+  return truncateDisplayText(value, maxLength);
 }
 
 interface KeypressEvent {

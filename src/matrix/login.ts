@@ -5,6 +5,7 @@ import { createClient, SSOAction } from "matrix-js-sdk";
 import type { IRefreshTokenResponse, LoginResponse } from "matrix-js-sdk";
 
 import type { MatrixSession } from "../store/index.js";
+import { formatErrorMessage } from "../util/errors.js";
 import { silentMatrixLogger, withSuppressedMatrixConsole } from "./logger.js";
 
 export const DEFAULT_BASE_URL = "https://matrix-client.matrix.org";
@@ -243,5 +244,5 @@ function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return formatErrorMessage(error);
 }
