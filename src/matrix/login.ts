@@ -5,6 +5,7 @@ import { createClient, SSOAction } from "matrix-js-sdk";
 import type { IRefreshTokenResponse, LoginResponse } from "matrix-js-sdk";
 
 import type { MatrixSession } from "../store/index.js";
+import { silentMatrixLogger, withSuppressedMatrixConsole } from "./logger.js";
 
 export const DEFAULT_BASE_URL = "https://matrix-client.matrix.org";
 
@@ -29,7 +30,7 @@ export async function loginWithSso(
   options: LoginWithSsoOptions = {},
 ): Promise<MatrixSession> {
   const listener = await waitForLoginToken();
-  const client = createClient({ baseUrl: DEFAULT_BASE_URL });
+  const client = createClient({ baseUrl: DEFAULT_BASE_URL, logger: silentMatrixLogger });
   const loginUrl = client.getSsoLoginUrl(listener.redirectUrl, "sso", undefined, matrixAction(action));
   options.onLoginUrl?.(loginUrl);
 
@@ -106,15 +107,17 @@ export async function waitForLoginToken(callbackPort = 0): Promise<LoginTokenLis
 }
 
 export async function exchangeLoginToken(loginToken: string): Promise<MatrixSession> {
-  const client = createClient({ baseUrl: DEFAULT_BASE_URL });
-  const response = await client.loginRequest({
-    initial_device_display_name: "Nugget",
-    refresh_token: true,
-    token: loginToken,
-    type: "m.login.token",
-  });
+  return withSuppressedMatrixConsole(async () => {
+    const client = createClient({ baseUrl: DEFAULT_BASE_URL, logger: silentMatrixLogger });
+    const response = await client.loginRequest({
+      initial_device_display_name: "Nugget",
+      refresh_token: true,
+      token: loginToken,
+      type: "m.login.token",
+    });
 
-  return sessionFromLoginResponse(response, DEFAULT_BASE_URL);
+    return sessionFromLoginResponse(response, DEFAULT_BASE_URL);
+  });
 }
 
 export async function refreshAccessToken(session: MatrixSession): Promise<MatrixSession> {
@@ -122,16 +125,20 @@ export async function refreshAccessToken(session: MatrixSession): Promise<Matrix
     throw new Error("Session has no refresh token.");
   }
 
+  const { refreshToken } = session;
   const client = createClient({
     accessToken: session.accessToken,
     baseUrl: session.baseUrl,
-    refreshToken: session.refreshToken,
+    logger: silentMatrixLogger,
+    refreshToken,
     userId: session.userId,
     ...(session.deviceId ? { deviceId: session.deviceId } : {}),
   });
 
-  const response = await client.refreshToken(session.refreshToken);
-  return sessionFromRefreshResponse(response, session);
+  return withSuppressedMatrixConsole(async () => {
+    const response = await client.refreshToken(refreshToken);
+    return sessionFromRefreshResponse(response, session);
+  });
 }
 
 function handleLoginCallback(

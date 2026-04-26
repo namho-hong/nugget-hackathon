@@ -120,12 +120,9 @@ async function handleLogin(args: string[]): Promise<CommandResult> {
   });
 
   await saveSession(session);
+  process.stdout.write(`Logged in as ${session.userId}\n`);
 
-  return {
-    exitCode: 0,
-    output: `Logged in as ${session.userId}\n`,
-    stream: "stdout",
-  };
+  return handleDefaultHome();
 }
 
 async function handleDefaultHome(): Promise<CommandResult> {
@@ -137,31 +134,31 @@ async function handleDefaultHome(): Promise<CommandResult> {
   }
 
   process.stdout.write("Loading Matrix account state...\n");
+  const action = await selectHomeActionFromMatrix();
 
+  return handleHomeAction(action);
+}
+
+async function selectHomeActionFromMatrix(): Promise<HomeAction> {
   return withMatrixClient(async (client) => {
     const workspaces = getJoinedSpaces(client);
     const childRooms = await getSpaceChildRoomIds(client, workspaces);
     const directMessages = getJoinedDirectRooms(client, {
       excludeRoomIds: childRooms.roomIds,
     });
-    const action = await selectHomeAction({
+    return selectHomeAction({
       directMessages,
       warnings: childRooms.warnings,
       workspaces,
     });
-
-    return handleHomeAction(action);
   });
 }
 
 async function handleHomeAction(action: HomeAction): Promise<CommandResult> {
   if (action.type === "logout") {
     await clearSession();
-    return {
-      exitCode: 0,
-      output: "Logged out. Local Matrix session cleared.\n",
-      stream: "stdout",
-    };
+    process.stdout.write("Logged out. Local Matrix session cleared.\nStarting login...\n");
+    return handleLogin([]);
   }
 
   if (action.type === "quit") {
@@ -245,10 +242,10 @@ function parseLoginAction(value: string | undefined): LoginAction | null {
 try {
   const result = await run(process.argv);
   process[result.stream].write(result.output);
-  process.exitCode = result.exitCode;
+  process.exit(result.exitCode);
 } catch (error) {
   process.stderr.write(`${formatError(error)}\n`);
-  process.exitCode = 1;
+  process.exit(1);
 }
 
 function formatError(error: unknown): string {

@@ -6,12 +6,14 @@ import {
 } from "matrix-js-sdk";
 
 import { loadSession, saveSession, type MatrixSession } from "../store/index.js";
+import { silentMatrixLogger, withSuppressedMatrixConsole } from "./logger.js";
 import { refreshAccessToken } from "./login.js";
 
 export function createMatrixClient(session: MatrixSession): MatrixClient {
   return createClient({
     accessToken: session.accessToken,
     baseUrl: session.baseUrl,
+    logger: silentMatrixLogger,
     ...(session.deviceId ? { deviceId: session.deviceId } : {}),
     ...(session.refreshToken
       ? {
@@ -85,17 +87,19 @@ export async function withMatrixClient<T>(
     throw new Error("Not logged in. Run `nugget login` first.");
   }
 
-  try {
-    return await runWithSession(session, fn);
-  } catch (error) {
-    if (!session.refreshToken || !isAuthError(error)) {
-      throw error;
-    }
+  return withSuppressedMatrixConsole(async () => {
+    try {
+      return await runWithSession(session, fn);
+    } catch (error) {
+      if (!session.refreshToken || !isAuthError(error)) {
+        throw error;
+      }
 
-    const refreshed = await refreshAccessToken(session);
-    await saveSession(refreshed);
-    return runWithSession(refreshed, fn);
-  }
+      const refreshed = await refreshAccessToken(session);
+      await saveSession(refreshed);
+      return runWithSession(refreshed, fn);
+    }
+  });
 }
 
 async function runWithSession<T>(
