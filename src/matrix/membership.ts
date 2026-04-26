@@ -1,5 +1,6 @@
 import {
   ClientEvent,
+  EventType,
   RoomEvent,
   SyncState,
   type MatrixClient,
@@ -42,6 +43,31 @@ export async function joinRoom(
   }
 }
 
+export function getInviteViaServers(
+  room: Room | null | undefined,
+  userIds: string[] = [],
+): string[] {
+  const servers = new Set<string>();
+
+  addMatrixIdServer(servers, room?.roomId);
+
+  if (room) {
+    const inviteEvent = room.currentState.getStateEvents(
+      EventType.RoomMember,
+      room.myUserId,
+    );
+
+    addMatrixIdServer(servers, inviteEvent?.getSender());
+    addMatrixIdServer(servers, room.getDMInviter());
+  }
+
+  for (const userId of userIds) {
+    addMatrixIdServer(servers, userId);
+  }
+
+  return [...servers];
+}
+
 export async function leaveRoom(client: MatrixClient, roomId: string): Promise<void> {
   const target = roomId.trim();
 
@@ -61,10 +87,61 @@ export async function leaveRoom(client: MatrixClient, roomId: string): Promise<v
 
   try {
     await client.leave(target);
-    await waitForRoomNotJoined(client, target);
+    await waitForRoomMembershipNot(client, target, membership);
   } catch (error) {
     throw new Error(`Could not leave room ${target}: ${formatError(error)}`);
   }
+
+  try {
+    await removeDirectRoomAccountData(client, target);
+  } catch (error) {
+    throw new Error(
+      `Left room ${target}, but could not update direct chat metadata: ${formatError(error)}`,
+    );
+  }
+}
+
+export async function removeDirectRoomAccountData(
+  client: MatrixClient,
+  roomId: string,
+): Promise<void> {
+  const target = roomId.trim();
+
+  if (!isMatrixRoomId(target)) {
+    throw new Error(`Invalid Matrix room ID: ${roomId}`);
+  }
+
+  const directEvent = client.getAccountData(EventType.Direct);
+  const currentContent = directEvent?.getContent<Record<string, unknown>>() ?? {};
+  const nextContent: Record<string, string[]> = {};
+  let removed = false;
+
+  for (const [userId, roomIds] of Object.entries(currentContent)) {
+    if (!Array.isArray(roomIds)) {
+      continue;
+    }
+
+    const stringRoomIds = roomIds.filter(
+      (candidateRoomId): candidateRoomId is string => typeof candidateRoomId === "string",
+    );
+    const filteredRoomIds = stringRoomIds.filter(
+      (candidateRoomId) => candidateRoomId !== target,
+    );
+
+    if (filteredRoomIds.length !== stringRoomIds.length) {
+      removed = true;
+    }
+
+    if (filteredRoomIds.length > 0) {
+      nextContent[userId] = filteredRoomIds;
+    }
+  }
+
+  if (!removed) {
+    return;
+  }
+
+  await client.setAccountData(EventType.Direct, nextContent);
 }
 
 export async function inviteToRoom(
@@ -110,9 +187,18 @@ export async function waitForRoomNotJoined(
   roomId: string,
   timeoutMs = 30_000,
 ): Promise<void> {
+  return waitForRoomMembershipNot(client, roomId, "join", timeoutMs);
+}
+
+export async function waitForRoomMembershipNot(
+  client: MatrixClient,
+  roomId: string,
+  membership: RoomMembershipState,
+  timeoutMs = 30_000,
+): Promise<void> {
   const currentMembership = (): RoomMembershipState => getRoomMembership(client, roomId);
 
-  if (currentMembership() !== "join") {
+  if (currentMembership() !== membership) {
     return;
   }
 
@@ -124,7 +210,7 @@ export async function waitForRoomNotJoined(
       cleanup();
       reject(
         new Error(
-          `Timed out waiting for room ${roomId} to stop being joined after ${Math.round(
+          `Timed out waiting for room ${roomId} membership to stop being ${membership} after ${Math.round(
             timeoutMs / 1000,
           )}s. Last membership: ${lastMembership}; last sync state: ${lastState}${
             lastError ? ` (${lastError.message})` : ""
@@ -144,7 +230,7 @@ export async function waitForRoomNotJoined(
     const check = (): void => {
       lastMembership = currentMembership();
 
-      if (lastMembership !== "join") {
+      if (lastMembership !== membership) {
         cleanup();
         resolve();
       }
@@ -189,6 +275,32 @@ function isMatrixRoomAlias(value: string): boolean {
 
 function isMatrixRoomIdOrAlias(value: string): boolean {
   return isMatrixRoomId(value) || isMatrixRoomAlias(value);
+}
+
+function addMatrixIdServer(servers: Set<string>, matrixId: string | undefined): void {
+  const server = getMatrixIdServer(matrixId);
+
+  if (server) {
+    servers.add(server);
+  }
+}
+
+function getMatrixIdServer(matrixId: string | undefined): string | null {
+  if (!matrixId || matrixId.length < 3) {
+    return null;
+  }
+
+  if (!matrixId.startsWith("!") && !matrixId.startsWith("#") && !matrixId.startsWith("@")) {
+    return null;
+  }
+
+  const serverSeparator = matrixId.indexOf(":");
+
+  if (serverSeparator < 2 || serverSeparator === matrixId.length - 1) {
+    return null;
+  }
+
+  return matrixId.slice(serverSeparator + 1);
 }
 
 function isRoomMembershipState(

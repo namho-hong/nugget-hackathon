@@ -72,6 +72,7 @@ export interface OpenChatViewOptions {
   historyBatchSize?: number;
   maxHistoryBatches?: number;
   onAgentRequest?: (request: ChatAgentRequest) => Promise<void> | void;
+  onLeaveRoom?: (roomId: string) => Promise<void> | void;
   onOpenThread?: (threadRootEventId: string) => Promise<void> | void;
 }
 
@@ -105,6 +106,7 @@ type ChatViewMode =
   | {
       type: "room";
       onAgentRequest?: (request: ChatAgentRequest) => Promise<void> | void;
+      onLeaveRoom?: (roomId: string) => Promise<void> | void;
       onOpenThread?: (threadRootEventId: string) => Promise<void> | void;
     }
   | {
@@ -133,6 +135,7 @@ export async function openChatView(
 
   return await runInteractiveChat(client, room, {
     ...(options.onAgentRequest ? { onAgentRequest: options.onAgentRequest } : {}),
+    ...(options.onLeaveRoom ? { onLeaveRoom: options.onLeaveRoom } : {}),
     type: "room",
     ...(options.onOpenThread ? { onOpenThread: options.onOpenThread } : {}),
   });
@@ -388,6 +391,7 @@ async function runInteractiveChat(
 
         try {
           await leaveRoom(client, room.roomId);
+          await mode.onLeaveRoom?.(room.roomId);
           finish({ type: "quit" }, `Left room ${room.roomId}.`);
         } catch (error) {
           submitting = false;

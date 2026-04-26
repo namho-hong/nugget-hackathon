@@ -20,6 +20,10 @@ import {
   getRoomDisplayName,
   isSpaceRoom,
 } from "../src/matrix/rooms.js";
+import {
+  getInviteViaServers,
+  removeDirectRoomAccountData,
+} from "../src/matrix/membership.js";
 
 function fixture(name: string): unknown {
   return JSON.parse(
@@ -139,6 +143,62 @@ test("detects one-to-one pending direct invites", () => {
       roomId: "!invite:example.org",
     },
   ]);
+});
+
+test("derives invite via servers from room and inviter IDs", () => {
+  const invite = new MatrixEvent({
+    content: { membership: "invite" },
+    event_id: "$invite",
+    origin_server_ts: 0,
+    room_id: "!invite:room.example.org",
+    sender: "@alice:sender.example.org",
+    state_key: "@me:example.org",
+    type: EventType.RoomMember,
+  });
+  const room = {
+    currentState: {
+      getStateEvents: (type: string, stateKey: string) =>
+        type === EventType.RoomMember && stateKey === "@me:example.org"
+          ? invite
+          : undefined,
+    },
+    getDMInviter: () => "@carol:dm.example.org",
+    myUserId: "@me:example.org",
+    roomId: "!invite:room.example.org",
+  } as unknown as Room;
+
+  assert.deepEqual(getInviteViaServers(room, ["@bob:sender.example.org"]), [
+    "room.example.org",
+    "sender.example.org",
+    "dm.example.org",
+  ]);
+});
+
+test("removes left rooms from direct account data", async () => {
+  let nextContent: Record<string, string[]> | null = null;
+  const client = {
+    getAccountData: (type: string) =>
+      type === EventType.Direct
+        ? {
+            getContent: () => ({
+              "@alice:example.org": ["!left:example.org", "!keep:example.org"],
+              "@bob:example.org": ["!left:example.org"],
+              "@carol:example.org": ["!other:example.org"],
+            }),
+          }
+        : undefined,
+    setAccountData: async (type: string, content: Record<string, string[]>) => {
+      assert.equal(type, EventType.Direct);
+      nextContent = content;
+    },
+  } as unknown as MatrixClient;
+
+  await removeDirectRoomAccountData(client, "!left:example.org");
+
+  assert.deepEqual(nextContent, {
+    "@alice:example.org": ["!keep:example.org"],
+    "@carol:example.org": ["!other:example.org"],
+  });
 });
 
 function fakeRoom(options: {

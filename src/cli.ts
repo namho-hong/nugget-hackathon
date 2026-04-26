@@ -21,6 +21,7 @@ import {
   getJoinedRooms,
   getJoinedDirectRooms,
   getJoinedSpaceRooms,
+  getInviteViaServers,
   getRoomDisplayName,
   getPendingDirectRoomInvites,
   getJoinedSpaces,
@@ -58,6 +59,7 @@ import {
   clearSession,
   getAppStatePath,
   getSessionPath,
+  forgetRecentDm,
   loadAppState,
   loadSession,
   recordRecentDm,
@@ -506,6 +508,7 @@ async function handleLeaveCommand(args: string[]): Promise<CommandResult> {
 
   return withMatrixClient(async (client) => {
     await leaveRoom(client, roomId);
+    await forgetRecentDm(roomId);
 
     return {
       exitCode: 0,
@@ -739,6 +742,7 @@ async function handleOpenCommand(args: string[]): Promise<CommandResult> {
 
     return await openChatView(client, selection.roomId, {
       onAgentRequest: (request) => openAgentBesideCurrentSurface(request),
+      onLeaveRoom: (leftRoomId) => forgetRecentDm(leftRoomId),
       onOpenThread: (threadRootEventId) =>
         openThreadBesideCurrentSurface(selection.roomId, threadRootEventId),
     });
@@ -825,6 +829,7 @@ async function handleOpenRoom(roomId: string): Promise<CommandResult> {
 
     return await openChatView(client, room.roomId, {
       onAgentRequest: (request) => openAgentBesideCurrentSurface(request),
+      onLeaveRoom: (leftRoomId) => forgetRecentDm(leftRoomId),
       onOpenThread: (threadRootEventId) =>
         openThreadBesideCurrentSurface(room.roomId, threadRootEventId),
     });
@@ -874,6 +879,7 @@ async function openDirectRoomFromClient(
 
   return await openChatView(client, room.roomId, {
     onAgentRequest: (request) => openAgentBesideCurrentSurface(request),
+    onLeaveRoom: (leftRoomId) => forgetRecentDm(leftRoomId),
     onOpenThread: (threadRootEventId) =>
       openThreadBesideCurrentSurface(room.roomId, threadRootEventId),
   });
@@ -1145,7 +1151,10 @@ async function handleAcceptDmInvite(roomId: string): Promise<CommandResult> {
       throw new Error(`DM invite ${roomId} is no longer pending.`);
     }
 
-    const joinedRoom = await client.joinRoom(roomId);
+    const joinedRoomId = await joinRoom(client, roomId, {
+      viaServers: getInviteViaServers(client.getRoom(roomId), [invite.inviterUserId]),
+    });
+    const joinedRoom = await waitForJoinedRoom(client, joinedRoomId);
     const directUserId = invite.inviterUserId;
     const currentUserId = client.getUserId();
 
@@ -1184,13 +1193,17 @@ async function handleAcceptWorkspaceInvite(spaceId: string): Promise<CommandResu
       throw new Error(`Workspace invite ${spaceId} is no longer pending.`);
     }
 
-    const joinedSpace = await client.joinRoom(spaceId);
-    await waitForRoomMembership(client, joinedSpace.roomId, "join");
-    const joinedSpaceSummary = await waitForJoinedSpace(client, joinedSpace.roomId);
-    const syncedSpace = client.getRoom(joinedSpace.roomId) ?? joinedSpace;
-    const stateName = await getSpaceStateName(client, syncedSpace.roomId);
+    const joinedSpaceId = await joinRoom(client, spaceId, {
+      viaServers: getInviteViaServers(client.getRoom(spaceId), [invite.inviterUserId]),
+    });
+    await waitForRoomMembership(client, joinedSpaceId, "join");
+    const joinedSpaceSummary = await waitForJoinedSpace(client, joinedSpaceId);
+    const syncedSpace = client.getRoom(joinedSpaceId);
+    const stateName = await getSpaceStateName(client, joinedSpaceId);
     const workspace = {
-      name: stateName ?? getSpaceDisplayName(syncedSpace, invite.name),
+      name:
+        stateName ??
+        (syncedSpace ? getSpaceDisplayName(syncedSpace, invite.name) : joinedSpaceSummary.name),
       roomId: joinedSpaceSummary.roomId,
     };
 
@@ -1223,7 +1236,7 @@ async function handleRejectWorkspaceInvite(spaceId: string): Promise<CommandResu
       throw new Error(`Workspace invite ${spaceId} is no longer pending.`);
     }
 
-    await client.leave(spaceId);
+    await leaveRoom(client, spaceId);
 
     return {
       exitCode: 0,
@@ -1241,7 +1254,7 @@ async function handleRejectDmInvite(roomId: string): Promise<CommandResult> {
       throw new Error(`DM invite ${roomId} is no longer pending.`);
     }
 
-    await client.leave(roomId);
+    await leaveRoom(client, roomId);
 
     return {
       exitCode: 0,

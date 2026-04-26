@@ -126,6 +126,35 @@ export async function recordRecentDm(dm: {
   });
 }
 
+export async function forgetRecentDm(roomId: string): Promise<void> {
+  const { state } = await loadAppState();
+  const nextState = forgetRecentDmFromState(state, roomId);
+
+  if (nextState === state) {
+    return;
+  }
+
+  await saveAppState(nextState);
+}
+
+export function forgetRecentDmFromState(
+  state: NuggetAppState,
+  roomId: string,
+): NuggetAppState {
+  const recentDms = state.recentDms.filter((recent) => recent.roomId !== roomId);
+
+  if (recentDms.length === state.recentDms.length) {
+    return state;
+  }
+
+  return {
+    ...(state.lastOpenedAt === undefined ? {} : { lastOpenedAt: state.lastOpenedAt }),
+    recentDms,
+    recentWorkspaces: state.recentWorkspaces,
+    version: state.version,
+  };
+}
+
 export function emptyAppState(): NuggetAppState {
   return {
     recentDms: [],

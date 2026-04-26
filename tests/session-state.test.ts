@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { emptyAppState, parseAppState } from "../src/store/app-state.js";
+import {
+  emptyAppState,
+  forgetRecentDmFromState,
+  parseAppState,
+} from "../src/store/app-state.js";
 import { parseSession } from "../src/store/session.js";
 
 function fixture(name: string): unknown {
@@ -52,6 +56,23 @@ test("validates app state versions, recents, and malformed fields", () => {
     lastOpenedAt: 3000,
     recentDms: [{ name: "Bob", openedAt: 1000, roomId: "!dm:example.org" }],
     recentWorkspaces: [{ name: "Product", openedAt: 2000, spaceId: "!space:example.org" }],
+    version: 1,
+  });
+});
+
+test("removes a forgotten DM from app state recents", () => {
+  assert.deepEqual(forgetRecentDmFromState({
+    lastOpenedAt: 3000,
+    recentDms: [
+      { name: "Alice", openedAt: 1000, roomId: "!left:example.org" },
+      { name: "Bob", openedAt: 2000, roomId: "!keep:example.org" },
+    ],
+    recentWorkspaces: [{ name: "Product", openedAt: 1500, spaceId: "!space:example.org" }],
+    version: 1,
+  }, "!left:example.org"), {
+    lastOpenedAt: 3000,
+    recentDms: [{ name: "Bob", openedAt: 2000, roomId: "!keep:example.org" }],
+    recentWorkspaces: [{ name: "Product", openedAt: 1500, spaceId: "!space:example.org" }],
     version: 1,
   });
 });

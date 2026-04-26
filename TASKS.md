@@ -1,3 +1,113 @@
+# Invite Accept And Reject Refresh
+
+## Goal
+
+Make pending DM and workspace invite accept/reject flows work reliably from the
+terminal home menu.
+
+## Definition of Done
+
+- [x] Accepting a pending DM invite supplies server hints for room-ID joins.
+- [x] Accepting a pending workspace invite uses the same server-hinted join path.
+- [x] Rejecting a pending invite waits until Matrix sync no longer reports it as
+  pending.
+- [x] Focused tests cover invite via-server derivation.
+- [x] `pnpm build` passes.
+- [x] Relevant tests pass.
+- [x] Working diff is reviewed for unrelated edits.
+
+## Checklist
+
+- [x] Inspect home invite actions, Matrix membership helpers, and invite summaries.
+- [x] Add invite server-hint extraction for joined room IDs.
+- [x] Route pending invite accepts through the membership helper.
+- [x] Make pending invite rejection wait for invite membership to clear.
+- [x] Add focused tests.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+## Verification Commands
+
+```sh
+pnpm build
+pnpm test
+git diff --check
+```
+
+Manual verification requiring Matrix account:
+
+```sh
+./nugget
+# Accept a pending DM invite and confirm it joins instead of "No known servers".
+# Reject a pending DM/workspace invite, refresh home, and confirm it disappears.
+```
+
+## Current Status
+
+Implementation is complete with local verification:
+
+- `pnpm build`
+- `pnpm test`
+- `git diff --check`
+
+Pending DM and workspace accepts now pass invite-derived server hints to the
+shared `joinRoom` helper. Pending invite rejection now goes through `leaveRoom`,
+which waits for the original membership state to clear before returning.
+
+# DM Leave Cleanup
+
+## Goal
+
+Make leaving a DM remove the room from Nugget's DM surfaces instead of leaving
+stale DM metadata or recent hints behind.
+
+## Definition of Done
+
+- [x] Leaving a Matrix room removes that room ID from `m.direct` account data.
+- [x] Leaving a room removes the room ID from local recent DM state.
+- [x] Focused tests cover DM account-data and recent-state cleanup.
+- [x] `pnpm build` passes.
+- [x] Relevant tests pass.
+- [x] Working diff is reviewed for unrelated edits.
+
+## Checklist
+
+- [x] Inspect DM list, leave, recent-state, and direct-room metadata paths.
+- [x] Add account-data cleanup for left DM rooms.
+- [x] Add local recent DM cleanup for leave paths.
+- [x] Add focused tests.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+## Verification Commands
+
+```sh
+pnpm build
+pnpm test
+git diff --check
+```
+
+Manual verification requiring Matrix account:
+
+```sh
+./nugget leave "<dm-room-id>"
+./nugget
+# Confirm the left DM no longer appears in the DMs section.
+```
+
+## Current Status
+
+Investigation found `leaveRoom` changes Matrix membership, while DM metadata
+comes from `m.direct` account data and Nugget also keeps local recent-DM hints.
+Implementation is complete with local verification:
+
+- `pnpm build`
+- `pnpm test`
+- `git diff --check`
+
+Manual live Matrix verification still requires leaving a real DM and reopening
+the home menu.
+
 # Persistence And Recovery
 
 ## Goal
