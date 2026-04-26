@@ -1120,3 +1120,227 @@ now uses the same `renameCurrentWorkspace` helper. Local verification passed:
 
 - `pnpm build`
 - `git diff --check`
+
+# cmux Message Notification Payload
+
+Goal: Matrix message notifications sent through cmux should use the sender as
+the notification title and the message text as the body/description, while
+documenting why macOS native notifications may not appear when cmux is focused.
+
+Definition of Done:
+
+- [x] Chat view message notifications use sender title and message body.
+- [x] Workspace picker activity notifications use sender title and message body.
+- [x] cmux notification behavior is investigated with local cmux commands.
+- [x] `pnpm build` passes.
+- [x] Working diff is reviewed for unrelated edits.
+
+Checklist:
+
+- [x] Inspect current chat and workspace notification call sites.
+- [x] Inspect cmux notify command behavior and live notification queue.
+- [x] Update notification payload formatting.
+- [x] Run verification commands.
+- [x] Review working diff.
+
+Verification Commands:
+
+```sh
+pnpm build
+git diff --check
+```
+
+Current status:
+
+Investigation found Nugget sends notifications via `cmux notify`; diagnostic
+notifications appear in `cmux list-notifications`. Native macOS delivery appears
+to be governed by cmux focus/notification routing outside Nugget's payload code.
+Local verification passed:
+
+- `pnpm build`
+- `git diff --check`
+
+Diff review notes:
+
+- This change intentionally updates the notification payloads in `src/cli.ts`,
+  `src/ui/chat-view.ts`, and this `TASKS.md` section.
+- Existing concurrent sender-color rendering changes in `src/ui/chat-view.ts`
+  were left intact.
+
+# cmux Notification Surface Targeting
+
+Goal: Message notifications should use the sender as the title, the message as
+the body, and cmux should flash the surface that owns the relevant room/thread
+instead of whichever pane is currently active.
+
+Definition of Done:
+
+- [x] Notification title is always the sender display name.
+- [x] Notification body is the message text without a sender prefix.
+- [x] Room chat notifications target the current room surface.
+- [x] Thread chat notifications target the current thread surface.
+- [x] Workspace picker activity notifications target the open room surface when
+  Nugget knows one, with a deterministic fallback.
+- [x] `pnpm build` passes.
+- [x] Working diff is reviewed for unrelated edits.
+
+Checklist:
+
+- [x] Inspect current notification payload and cmux target handling.
+- [x] Identify missing `--workspace/--surface` as likely random flash cause.
+- [x] Add explicit notification target support to `CmuxClient`.
+- [x] Add workspace room notification target lookup.
+- [x] Wire notification targets at chat and workspace call sites.
+- [x] Run verification commands.
+- [x] Review working diff.
+
+Verification Commands:
+
+```sh
+pnpm build
+git diff --check
+```
+
+Current status:
+
+Investigation found `CmuxClient.run()` strips caller cmux environment variables
+by default, while `notify()` did not pass `--workspace` or `--surface`. That lets
+cmux choose a default target from active/focused state, which explains the
+observed border flash on the wrong pane.
+Implemented explicit cmux notification targeting and verified locally:
+
+- `pnpm build`
+- `pnpm test`
+- `git diff --check`
+
+Diff review notes:
+
+- This change intentionally updates `src/cmux/client.ts`,
+  `src/cmux/workspace-controller.ts`, `src/cli.ts`, `tests/cmux-tree.test.ts`,
+  and this `TASKS.md` section.
+- Existing in-progress agent mention work in `src/agent/`,
+  `src/cmux/agent-controller.ts`, `src/cmux/index.ts`, `src/ui/chat-commands.ts`,
+  and `src/ui/chat-view.ts` was left intact.
+
+# Agent Mention Pane Flow
+
+Goal: Make local `@codex`, `@claude`, and `@hermes` chat composer mentions
+start a right-side cmux agent pane instead of being treated only as plain chat.
+
+Definition of Done:
+
+- [x] Chat view handles supported `@agent <request>` mentions.
+- [x] Empty `@agent` prompts show usage and do not send a Matrix message.
+- [x] `@agent <request>` sends the typed message to Matrix before starting the
+  local agent.
+- [x] Agent pane startup receives room/thread context and recent messages.
+- [x] cmux opens/focuses a right-side agent surface with a prompt file.
+- [x] `pnpm build` passes.
+- [x] Working diff is reviewed for unrelated edits.
+
+Checklist:
+
+- [x] Inspect existing chat composer, parser tests, docs, and cmux controllers.
+- [x] Add agent prompt/command helpers.
+- [x] Add cmux agent pane controller.
+- [x] Wire chat view `@agent` handling and CLI callbacks.
+- [x] Run verification commands.
+- [x] Review working diff.
+
+Verification Commands:
+
+```sh
+pnpm build
+git diff --check
+```
+
+Manual verification requiring Matrix account, cmux, and an installed agent CLI:
+
+```sh
+./nugget workspace "<joined-space-id>"
+# Open a room and type: @codex summarize this room
+# Confirm a right-side agent pane opens and receives prompt context.
+```
+
+Current status:
+
+Implementation is complete at local verification level. Investigation found
+`parseAgentMention()` and parser tests existed, but `src/ui/chat-view.ts` never
+called the parser and there was no agent pane controller.
+
+Added:
+
+- Shared agent request, prompt file, and command helpers under `src/agent/`.
+- `openAgentBesideCurrentSurface()` cmux controller for right-side agent panes.
+- Chat view `@agent` handling and CLI callbacks for room/thread views.
+
+Verification passed:
+
+- `pnpm build`
+- `pnpm test`
+- `git diff --check`
+
+Manual live Matrix/cmux verification still requires a Matrix account, running
+cmux workspace, and installed Codex/Claude/Hermes CLI.
+
+# Shared Thread Agent Pane
+
+Goal: Thread views and `@agent` sessions should share one right-side cmux pane,
+adding new surfaces in that pane instead of creating a new pane for every
+thread or agent session.
+
+Definition of Done:
+
+- [x] Opening the first thread creates a right-side shared pane when needed.
+- [x] Opening another thread adds a surface to the existing shared pane.
+- [x] Starting the first `@agent` session creates/reuses the shared pane.
+- [x] Starting another `@agent` session adds a surface to the existing shared
+  pane.
+- [x] Thread and agent sessions can reuse each other's pane.
+- [x] Exact existing thread surfaces are still focused instead of duplicated.
+- [x] `pnpm build` passes.
+- [x] `pnpm test` passes.
+- [x] Working diff is reviewed for unrelated edits.
+
+Checklist:
+
+- [x] Inspect thread and agent cmux controllers.
+- [x] Add shared sidecar pane detection and surface creation.
+- [x] Wire thread controller to add surfaces in the shared pane.
+- [x] Wire agent controller to use the same shared pane.
+- [x] Run verification commands.
+- [x] Review working diff.
+
+Verification Commands:
+
+```sh
+pnpm build
+pnpm test
+git diff --check
+```
+
+Manual verification requiring Matrix account and cmux:
+
+```sh
+./nugget workspace "<joined-space-id>"
+# Open two different threads from a room; confirm one right-side pane with two surfaces.
+# Start @codex from a room/thread; confirm it appears as another surface in that same pane.
+```
+
+Current status:
+
+Implementation is complete at local verification level. `src/cmux/sidecar-pane.ts`
+now centralizes shared thread/agent pane detection and surface creation.
+`openThreadBesideCurrentSurface()` and `openAgentBesideCurrentSurface()` both
+use that helper, so the first session creates a right-side pane and subsequent
+thread/agent sessions add surfaces to that pane. Exact existing thread surfaces
+are still focused instead of duplicated.
+
+Verification passed:
+
+- `pnpm build`
+- `pnpm test`
+- `git diff --check`
+
+Manual live Matrix/cmux verification still requires a Matrix account and a
+running cmux workspace.

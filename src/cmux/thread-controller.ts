@@ -7,6 +7,7 @@ import {
   getWorkspaceSurfaces,
   type CmuxPaneSurfaceRef,
 } from "./client.js";
+import { createThreadAgentSurface } from "./sidecar-pane.js";
 
 export async function openThreadBesideCurrentSurface(
   roomId: string,
@@ -47,50 +48,36 @@ export async function openThreadBesideCurrentSurface(
     }
   }
 
-  const beforeSurfaceRefs = new Set(
-    getWorkspaceSurfaces(beforeWorkspace).map((surface) => surface.ref),
-  );
+  const sourcePane = findSurfacePane(beforeWorkspace, surfaceRef);
 
-  await cmux.newSplit("right", {
-    surfaceRef,
+  if (!sourcePane) {
+    throw new Error(`cmux surface ${surfaceRef} has no containing pane.`);
+  }
+
+  const target = await createThreadAgentSurface(cmux, {
+    sourcePaneRef: sourcePane.paneRef,
+    sourceSurfaceRef: surfaceRef,
+    workspace: beforeWorkspace,
     workspaceRef,
   });
 
-  const afterTree = await cmux.tree({ all: true });
-  const afterWorkspace = findWorkspace(afterTree, workspaceRef);
-
-  if (!afterWorkspace) {
-    throw new Error(`cmux workspace ${workspaceRef} was not found after split.`);
-  }
-
-  const newSurface = getWorkspaceSurfaces(afterWorkspace).find(
-    (surface) => !beforeSurfaceRefs.has(surface.ref) && surface.type !== "browser",
-  );
-
-  if (!newSurface) {
-    throw new Error("cmux split succeeded, but Nugget could not find the new thread surface.");
-  }
-
-  const pane = findSurfacePane(afterWorkspace, newSurface.ref);
-
-  if (!pane) {
-    throw new Error(`cmux surface ${newSurface.ref} has no containing pane.`);
-  }
-
   const command =
     `CMUX_WORKSPACE_ID=${shellQuote(workspaceRef)} ` +
-    `CMUX_SURFACE_ID=${shellQuote(newSurface.ref)} ` +
+    `CMUX_SURFACE_ID=${shellQuote(target.surfaceRef)} ` +
+    "NUGGET_THREAD_PANE=1 " +
+    `NUGGET_THREAD_ROOM_ID=${shellQuote(roomId)} ` +
+    `NUGGET_THREAD_ROOT_EVENT_ID=${shellQuote(threadRootEventId)} ` +
     `${shellQuote(defaultNuggetCommand())} thread ` +
     `${shellQuote(roomId)} ${shellQuote(threadRootEventId)}`;
 
   await cmux.respawnPane({
     command,
-    surfaceRef: newSurface.ref,
+    surfaceRef: target.surfaceRef,
     workspaceRef,
   });
 
-  if (!(await tryFocusPaneSurface(cmux, workspaceRef, pane))) {
-    throw new Error(`Could not focus new thread surface ${newSurface.ref}.`);
+  if (!(await tryFocusPaneSurface(cmux, workspaceRef, target))) {
+    throw new Error(`Could not focus new thread surface ${target.surfaceRef}.`);
   }
 }
 

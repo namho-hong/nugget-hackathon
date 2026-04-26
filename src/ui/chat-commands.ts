@@ -1,6 +1,7 @@
 import { isMatrixUserId } from "../matrix/membership.js";
+import type { AgentName } from "../agent/types.js";
 
-export type AgentName = "codex" | "claude" | "hermes";
+export type { AgentName };
 
 export type AgentMentionParseResult =
   | { type: "agent"; agent: AgentName; prompt: string; emptyPrompt: boolean }

@@ -12,6 +12,11 @@ import {
 import type { Room } from "matrix-js-sdk";
 
 import { CmuxClient } from "../cmux/index.js";
+import type {
+  AgentContextMessage,
+  AgentName,
+  ChatAgentRequest,
+} from "../agent/types.js";
 import {
   getBundledThreadReplyCount,
   getRoomDisplayName,
@@ -24,11 +29,12 @@ import {
   resolveRoomOrThrow,
   sendThreadMessage,
 } from "../matrix/index.js";
+import { parseAgentMention } from "./chat-commands.js";
 import { formatErrorMessage } from "../util/errors.js";
 
 const HISTORY_BATCH_SIZE = 100;
 const MAX_HISTORY_BATCHES = 1000;
-const HEADER_LINES = 3;
+const HEADER_LINES = 2;
 const COMPOSER_LINES = 3;
 const MESSAGE_LEFT_PADDING = 1;
 const MESSAGE_GAP = 2;
@@ -36,17 +42,41 @@ const MESSAGE_TIME_WIDTH = 5;
 const MESSAGE_MIN_NAME_WIDTH = 8;
 const MESSAGE_MAX_NAME_WIDTH = 24;
 const MESSAGE_MIN_BODY_WIDTH = 10;
+const AGENT_CONTEXT_MESSAGE_LIMIT = 30;
 const ANSI_RESET = "\x1b[0m";
 const INVERSE = "\x1b[7m";
 const DIM = "\x1b[2m";
+const BOLD = "\x1b[1m";
+const BOLD_OFF = "\x1b[22m";
+const FOREGROUND_RESET = "\x1b[39m";
+const SENDER_COLORS = [
+  "\x1b[38;5;39m",
+  "\x1b[38;5;83m",
+  "\x1b[38;5;214m",
+  "\x1b[38;5;207m",
+  "\x1b[38;5;45m",
+  "\x1b[38;5;220m",
+  "\x1b[38;5;141m",
+  "\x1b[38;5;160m",
+  "\x1b[38;5;51m",
+  "\x1b[38;5;118m",
+  "\x1b[38;5;202m",
+  "\x1b[38;5;213m",
+  "\x1b[38;5;33m",
+  "\x1b[38;5;190m",
+  "\x1b[38;5;177m",
+  "\x1b[38;5;196m",
+];
 
 export interface OpenChatViewOptions {
   historyBatchSize?: number;
   maxHistoryBatches?: number;
+  onAgentRequest?: (request: ChatAgentRequest) => Promise<void> | void;
   onOpenThread?: (threadRootEventId: string) => Promise<void> | void;
 }
 
 export interface OpenThreadViewOptions {
+  onAgentRequest?: (request: ChatAgentRequest) => Promise<void> | void;
   onOpenThread?: (threadRootEventId: string) => Promise<void> | void;
 }
 
@@ -74,12 +104,14 @@ type HistoryEntry = RenderedMessage | RenderedNotice;
 type ChatViewMode =
   | {
       type: "room";
+      onAgentRequest?: (request: ChatAgentRequest) => Promise<void> | void;
       onOpenThread?: (threadRootEventId: string) => Promise<void> | void;
     }
   | {
       type: "thread";
       initialNotice?: string;
       initialThreadEvents: MatrixEvent[];
+      onAgentRequest?: (request: ChatAgentRequest) => Promise<void> | void;
       onOpenThread?: (threadRootEventId: string) => Promise<void> | void;
       threadRootEventId: string;
     };
@@ -100,6 +132,7 @@ export async function openChatView(
   }
 
   return await runInteractiveChat(client, room, {
+    ...(options.onAgentRequest ? { onAgentRequest: options.onAgentRequest } : {}),
     type: "room",
     ...(options.onOpenThread ? { onOpenThread: options.onOpenThread } : {}),
   });
@@ -138,6 +171,7 @@ export async function openThreadView(
   return await runInteractiveChat(client, room, {
     initialThreadEvents: threadEvents,
     ...(initialNotice ? { initialNotice } : {}),
+    ...(options.onAgentRequest ? { onAgentRequest: options.onAgentRequest } : {}),
     ...(options.onOpenThread ? { onOpenThread: options.onOpenThread } : {}),
     threadRootEventId,
     type: "thread",
@@ -398,6 +432,61 @@ async function runInteractiveChat(
         return;
       }
 
+      const agentMention = parseAgentMention(text);
+
+      if (agentMention.type === "agent") {
+        if (agentMention.emptyPrompt) {
+          inputBuffer = "";
+          setNotice(`Usage: @${agentMention.agent} <request>`);
+          return;
+        }
+
+        inputBuffer = "";
+        submitting = true;
+        render();
+
+        let messageSent = false;
+
+        try {
+          const triggerEventId =
+            mode.type === "thread"
+              ? await sendThreadAgentTrigger(text)
+              : await sendRoomAgentTrigger(text);
+          messageSent = true;
+
+          if (!mode.onAgentRequest) {
+            setNotice("Message sent. Agent panes are only available inside a cmux workspace.");
+            return;
+          }
+
+          await mode.onAgentRequest(
+            buildChatAgentRequest(
+              room,
+              mode,
+              threadEvents,
+              agentMention.agent,
+              agentMention.prompt,
+              triggerEventId,
+              text,
+              localUserId,
+              selectionMode ? selectedEventId : null,
+            ),
+          );
+          setNotice(`Started ${agentMention.agent}.`);
+        } catch (error) {
+          setNotice(
+            messageSent
+              ? `Agent start failed after sending message: ${formatError(error)}`
+              : `Send failed in ${room.roomId}: ${formatError(error)}`,
+          );
+        } finally {
+          submitting = false;
+          render();
+        }
+
+        return;
+      }
+
       if (text.startsWith("/")) {
         inputBuffer = "";
         setNotice(`Unknown command: ${text.split(/\s+/, 1)[0] ?? text}`);
@@ -435,6 +524,37 @@ async function runInteractiveChat(
         submitting = false;
         render();
       }
+    };
+
+    const sendRoomAgentTrigger = async (text: string): Promise<string> => {
+      const response = await client.sendMessage(room.roomId, {
+        body: text,
+        msgtype: MsgType.Text,
+      });
+
+      return getSentEventId(response);
+    };
+
+    const sendThreadAgentTrigger = async (text: string): Promise<string> => {
+      const sentEvent = await sendThreadMessage(
+        client,
+        room.roomId,
+        mode.type === "thread" ? mode.threadRootEventId : "",
+        mode.type === "thread"
+          ? getLatestThreadReplyTarget(threadEvents, mode.threadRootEventId)
+          : "",
+        text,
+      );
+
+      appendThreadEvent(threadEvents, seenEventIds, sentEvent);
+
+      const eventId = sentEvent.getId();
+
+      if (!eventId) {
+        throw new Error("Matrix send response did not include an event ID.");
+      }
+
+      return eventId;
     };
 
     const openSelectedThread = async (): Promise<void> => {
@@ -535,7 +655,7 @@ async function runInteractiveChat(
         }
 
         if (!isLocalEvent(event, localUserId)) {
-          const notification = formatIncomingNotification(room, event, mode);
+          const notification = formatIncomingNotification(room, event);
 
           if (notification) {
             void cmux.notify(notification);
@@ -729,11 +849,9 @@ function renderHeader(
 ): string[] {
   const roomName = sanitizeForTerminal(getRoomDisplayName(room));
   const title = threadRootEventId ? `# ${roomName} thread` : `# ${roomName}`;
-  const id = threadRootEventId ? `${room.roomId} thread ${threadRootEventId}` : room.roomId;
 
   return [
     fitDisplayText(title, width),
-    fitDisplayText(`${DIM}${id}${ANSI_RESET}`, width),
     fitDisplayText(notice ? `${DIM}${sanitizeForTerminal(notice)}${ANSI_RESET}` : "", width),
   ];
 }
@@ -745,6 +863,7 @@ function renderHistory(
 ): string[] {
   const lines: string[] = [];
   let previousMessage: RenderedMessage | null = null;
+  const senderColorIndexes = new Map<string, number>();
 
   for (const entry of entries) {
     if (entry.type === "notice") {
@@ -757,8 +876,11 @@ function renderHistory(
       previousMessage !== null &&
       previousMessage.senderId === entry.senderId &&
       minuteBucket(previousMessage.timestamp) === minuteBucket(entry.timestamp);
+    const senderColorIndex = getSenderColorIndex(senderColorIndexes, entry.senderId);
 
-    lines.push(...renderMessage(entry, width, grouped, entry.eventId === selectedEventId));
+    lines.push(
+      ...renderMessage(entry, width, grouped, entry.eventId === selectedEventId, senderColorIndex),
+    );
     previousMessage = entry;
   }
 
@@ -770,6 +892,7 @@ function renderMessage(
   width: number,
   grouped: boolean,
   selected: boolean,
+  senderColorIndex: number,
 ): string[] {
   const contentWidth = Math.max(20, width - MESSAGE_LEFT_PADDING);
   const senderWidth = Math.max(
@@ -789,9 +912,13 @@ function renderMessage(
     const showMeta = index === 0;
     const rowSender = showMeta ? sender : "";
     const rowTime = showMeta ? time : "";
+    const senderCell =
+      rowSender.length > 0
+        ? formatSenderCell(rowSender, senderColorIndex)
+        : padDisplayText(rowSender, senderWidth);
     const line =
       " ".repeat(MESSAGE_LEFT_PADDING) +
-      padDisplayText(rowSender, senderWidth) +
+      senderCell +
       " ".repeat(MESSAGE_GAP) +
       padDisplayText(body, bodyWidth) +
       " ".repeat(MESSAGE_GAP) +
@@ -799,6 +926,27 @@ function renderMessage(
 
     return selected ? `${INVERSE}${line}${ANSI_RESET}` : line;
   });
+}
+
+function getSenderColorIndex(senderColorIndexes: Map<string, number>, senderId: string): number {
+  const existing = senderColorIndexes.get(senderId);
+
+  if (existing !== undefined) {
+    return existing;
+  }
+
+  const next = senderColorIndexes.size % SENDER_COLORS.length;
+  senderColorIndexes.set(senderId, next);
+  return next;
+}
+
+function formatSenderCell(sender: string, senderColorIndex: number): string {
+  if (!process.stdout.isTTY) {
+    return sender;
+  }
+
+  const color = SENDER_COLORS[senderColorIndex] ?? "\x1b[38;5;39m";
+  return `${BOLD}${color}${sender}${FOREGROUND_RESET}${BOLD_OFF}`;
 }
 
 function renderSlashHelp(inputBuffer: string, width: number, mode: ChatViewMode): string[] {
@@ -950,7 +1098,6 @@ function isLocalEvent(event: MatrixEvent, localUserId: string | null | undefined
 function formatIncomingNotification(
   room: Room,
   event: MatrixEvent,
-  mode: ChatViewMode,
 ): { title: string; body: string } | null {
   const body = getMessageBody(event);
 
@@ -958,13 +1105,11 @@ function formatIncomingNotification(
     return null;
   }
 
-  const roomName = getRoomDisplayName(room);
-  const title = mode.type === "thread" ? `${roomName} thread` : roomName;
   const sender = getSenderLabel(room, event.getSender() ?? "");
 
   return {
-    title,
-    body: `${sender}: ${body}`,
+    title: sender,
+    body,
   };
 }
 
@@ -977,6 +1122,93 @@ function getMessageBody(event: MatrixEvent): string | null {
   const body = typeof content.body === "string" ? sanitizeForTerminal(content.body) : "";
 
   return body.trim().length > 0 ? body : null;
+}
+
+function getSentEventId(response: { event_id?: string }): string {
+  if (typeof response.event_id === "string" && response.event_id.length > 0) {
+    return response.event_id;
+  }
+
+  throw new Error("Matrix send response did not include an event ID.");
+}
+
+function buildChatAgentRequest(
+  room: Room,
+  mode: ChatViewMode,
+  threadEvents: readonly MatrixEvent[],
+  agent: AgentName,
+  prompt: string,
+  triggerEventId: string,
+  triggerBody: string,
+  localUserId: string | null | undefined,
+  selectedEventId: string | null,
+): ChatAgentRequest {
+  const recentMessages = getRecentAgentContextMessages(room, mode, threadEvents);
+  const triggerAlreadyIncluded = recentMessages.some((message) => message.eventId === triggerEventId);
+
+  if (!triggerAlreadyIncluded) {
+    const senderId = localUserId ?? room.myUserId ?? "";
+    recentMessages.push({
+      body: sanitizeForTerminal(triggerBody),
+      eventId: triggerEventId,
+      senderId,
+      senderLabel: senderId.length > 0 ? getSenderLabel(room, senderId) : "You",
+      ...(mode.type === "thread" ? { threadRootEventId: mode.threadRootEventId } : {}),
+      timestamp: Date.now(),
+    });
+  }
+
+  const cappedMessages = recentMessages.slice(-AGENT_CONTEXT_MESSAGE_LIMIT);
+  const latestEventId = cappedMessages.at(-1)?.eventId;
+
+  return {
+    agent,
+    isThreadView: mode.type === "thread",
+    ...(latestEventId ? { latestEventId } : {}),
+    prompt,
+    recentMessages: cappedMessages,
+    roomId: room.roomId,
+    roomName: getRoomDisplayName(room),
+    ...(selectedEventId ? { selectedEventId } : {}),
+    ...(mode.type === "thread" ? { threadRootEventId: mode.threadRootEventId } : {}),
+    triggerEventId,
+  };
+}
+
+function getRecentAgentContextMessages(
+  room: Room,
+  mode: ChatViewMode,
+  threadEvents: readonly MatrixEvent[],
+): AgentContextMessage[] {
+  const events = mode.type === "thread" ? threadEvents : room.getLiveTimeline().getEvents();
+  const messages: AgentContextMessage[] = [];
+
+  for (const event of events) {
+    if (mode.type === "thread" && !shouldShowInThread(event, mode.threadRootEventId)) {
+      continue;
+    }
+
+    const eventId = event.getId();
+    const body = getMessageBody(event);
+
+    if (!eventId || !body) {
+      continue;
+    }
+
+    const senderId = event.getSender() ?? "";
+    const threadRootEventId = getThreadRootForEvent(event);
+
+    messages.push({
+      body,
+      eventId,
+      senderId,
+      senderLabel: getSenderLabel(room, senderId),
+      ...(threadRootEventId && threadRootEventId !== eventId ? { threadRootEventId } : {}),
+      timestamp: event.getTs(),
+    });
+  }
+
+  return messages.slice(-AGENT_CONTEXT_MESSAGE_LIMIT);
 }
 
 function getThreadReplyCounts(events: readonly MatrixEvent[]): Map<string, number> {

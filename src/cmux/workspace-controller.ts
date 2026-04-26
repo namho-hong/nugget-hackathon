@@ -14,6 +14,7 @@ import {
 } from "./client.js";
 
 const PICKER_RESIZE_AMOUNT = 40;
+const NUGGET_WORKSPACE_PREFIX = "🟨 nugget:";
 
 export interface MatrixWorkspace {
   roomId: string;
@@ -104,6 +105,13 @@ export class WorkspaceController {
         })
         .catch(() => {});
     }
+  }
+
+  getRoomNotificationTarget(roomId: string): { surfaceRef: string; workspaceRef: string } {
+    return {
+      surfaceRef: this.openedRooms.get(roomId)?.surfaceRef ?? this.pickerSurfaceRef,
+      workspaceRef: this.workspaceRef,
+    };
   }
 
   private async createRoomPane(): Promise<CmuxPaneSurfaceRef> {
@@ -212,6 +220,7 @@ export function findNuggetWorkspace(
     return (
       workspace.description === description ||
       workspace.title === workspaceTitle(spaceName) ||
+      workspace.title === legacyWorkspaceTitle(spaceName) ||
       workspace.title?.includes(spaceId)
     );
   });
@@ -328,7 +337,11 @@ export function workspaceDescription(spaceId: string): string {
   return `nugget-space:${spaceId}`;
 }
 
-function workspaceTitle(spaceName: string): string {
+export function workspaceTitle(spaceName: string): string {
+  return `${NUGGET_WORKSPACE_PREFIX} ${spaceName}`;
+}
+
+function legacyWorkspaceTitle(spaceName: string): string {
   return `nugget: ${spaceName}`;
 }
 

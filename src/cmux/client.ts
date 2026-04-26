@@ -68,6 +68,8 @@ export interface CmuxPaneSurfaceRef {
 export interface CmuxNotifyOptions {
   title: string;
   body: string;
+  surfaceRef?: string | undefined;
+  workspaceRef?: string | undefined;
 }
 
 export class CmuxClient {
@@ -207,7 +209,10 @@ export class CmuxClient {
   }
 
   async notify(options: CmuxNotifyOptions): Promise<void> {
-    if (!isRunningInCmux()) {
+    const workspaceRef = options.workspaceRef ?? process.env.CMUX_WORKSPACE_ID;
+    const surfaceRef = options.surfaceRef ?? process.env.CMUX_SURFACE_ID;
+
+    if (!isRunningInCmux() && !workspaceRef && !surfaceRef) {
       return;
     }
 
@@ -218,6 +223,8 @@ export class CmuxClient {
         sanitizeNotificationText(options.title, 80),
         "--body",
         sanitizeNotificationText(options.body, 240),
+        ...(workspaceRef ? ["--workspace", workspaceRef] : []),
+        ...(surfaceRef ? ["--surface", surfaceRef] : []),
       ]);
     } catch {
       // Notifications are best-effort; chat and picker flows must keep working

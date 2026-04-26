@@ -9,7 +9,7 @@
       "workspaces": [
         {
           "ref": "workspace:1",
-          "title": "nugget: Product",
+          "title": "🟨 nugget: Product",
           "description": "nugget-space:!space:example.org",
           "selected": true,
           "panes": [

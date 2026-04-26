@@ -47,9 +47,11 @@ import {
   getOpenDirectRoomIds,
   getRequiredCmuxContext,
   launchWorkspace,
+  openAgentBesideCurrentSurface,
   openDirectRoomBesideCurrentSurface,
   openThreadBesideCurrentSurface,
   renameCurrentWorkspace,
+  workspaceTitle,
 } from "./cmux/index.js";
 import {
   clearAppState,
@@ -271,7 +273,7 @@ async function handleDefaultHome(): Promise<CommandResult> {
     return handleLogin([]);
   }
 
-  await renameCurrentWorkspaceBestEffort("nugget: Home");
+  await renameCurrentWorkspaceBestEffort(workspaceTitle("Home"));
   process.stdout.write("Loading Matrix account state...\n");
   const action = await selectHomeActionFromMatrix();
 
@@ -598,6 +600,7 @@ function watchWorkspaceRoomActivity(
   client: MatrixClient,
   spaceId: string,
   cmux: CmuxClient,
+  getNotificationTarget: (roomId: string) => { surfaceRef: string; workspaceRef: string },
   onActivity: (roomId: string) => void,
 ): () => void {
   const localUserId = client.getUserId();
@@ -652,9 +655,11 @@ function watchWorkspaceRoomActivity(
       return;
     }
 
+    const sender = getSenderLabel(eventRoom, event.getSender() ?? "");
     void cmux.notify({
-      title: getRoomDisplayName(eventRoom),
-      body: `${event.getSender() ?? "Someone"}: ${body}`,
+      ...getNotificationTarget(roomId),
+      title: sender,
+      body,
     });
   };
 
@@ -696,6 +701,17 @@ function getMessageBody(event: MatrixEvent): string | null {
   return body.length > 0 ? body : null;
 }
 
+function getSenderLabel(room: Room, senderId: string): string {
+  if (senderId.length === 0) {
+    return "Unknown";
+  }
+
+  const member = room.getMember(senderId);
+  const name = member?.name?.trim();
+
+  return name && name.length > 0 ? name : senderId;
+}
+
 async function handleOpenCommand(args: string[]): Promise<CommandResult> {
   if (args.length > 1) {
     return {
@@ -721,6 +737,7 @@ async function handleOpenCommand(args: string[]): Promise<CommandResult> {
     await recordRecentDmIfJoinedDirect(client, selection.roomId);
 
     return await openChatView(client, selection.roomId, {
+      onAgentRequest: (request) => openAgentBesideCurrentSurface(request),
       onOpenThread: (threadRootEventId) =>
         openThreadBesideCurrentSurface(selection.roomId, threadRootEventId),
     });
@@ -757,7 +774,9 @@ async function handleThreadCommand(args: string[]): Promise<CommandResult> {
 
   const result = await withMatrixClient(async (client) => {
     await waitForJoinedRoom(client, roomId);
-    return await openThreadView(client, roomId, threadRootEventId);
+    return await openThreadView(client, roomId, threadRootEventId, {
+      onAgentRequest: (request) => openAgentBesideCurrentSurface(request),
+    });
   });
 
   return handleNavigationResult(result);
@@ -801,9 +820,10 @@ async function handleOpenRoom(roomId: string): Promise<CommandResult> {
     const roomName = getRoomDisplayName(room);
 
     await recordRecentDmIfJoinedDirect(client, room.roomId);
-    await renameCurrentWorkspaceBestEffort(`nugget: ${roomName}`);
+    await renameCurrentWorkspaceBestEffort(workspaceTitle(roomName));
 
     return await openChatView(client, room.roomId, {
+      onAgentRequest: (request) => openAgentBesideCurrentSurface(request),
       onOpenThread: (threadRootEventId) =>
         openThreadBesideCurrentSurface(room.roomId, threadRootEventId),
     });
@@ -841,7 +861,7 @@ async function openDirectRoomFromClient(
     await recordRecentDmIfJoinedDirect(client, room.roomId);
   }
 
-  await renameCurrentWorkspaceBestEffort(`nugget: ${roomName}`);
+  await renameCurrentWorkspaceBestEffort(workspaceTitle(roomName));
 
   if (
     await openDirectRoomBesideCurrentSurface(room.roomId, {
@@ -852,6 +872,7 @@ async function openDirectRoomFromClient(
   }
 
   return await openChatView(client, room.roomId, {
+    onAgentRequest: (request) => openAgentBesideCurrentSurface(request),
     onOpenThread: (threadRootEventId) =>
       openThreadBesideCurrentSurface(room.roomId, threadRootEventId),
   });
@@ -928,7 +949,13 @@ async function runWorkspacePickerForSpace(
     onOpenRoom: (roomId) => controller.openRoom(roomId),
     title: `Workspace: ${space.name}`,
     watchRoomActivity: (onActivity) =>
-      watchWorkspaceRoomActivity(client, spaceId, cmux, onActivity),
+      watchWorkspaceRoomActivity(
+        client,
+        spaceId,
+        cmux,
+        (roomId) => controller.getRoomNotificationTarget(roomId),
+        onActivity,
+      ),
   });
 }
 
