@@ -16,6 +16,7 @@ import {
 import {
   getJoinedDirectRooms,
   getJoinedRooms,
+  getPendingDirectRoomInvites,
   getRoomDisplayName,
   isSpaceRoom,
 } from "../src/matrix/rooms.js";
@@ -99,6 +100,45 @@ test("classifies joined rooms, spaces, and direct messages", async () => {
     "!room:example.org",
   ]);
   assert.equal(getRoomDisplayName(room), "General");
+});
+
+test("detects one-to-one pending direct invites", () => {
+  const invite = new MatrixEvent({
+    content: { membership: "invite" },
+    event_id: "$invite",
+    origin_server_ts: 0,
+    room_id: "!invite:example.org",
+    sender: "@alice:example.org",
+    state_key: "@me:example.org",
+    type: EventType.RoomMember,
+  });
+  const room = {
+    currentState: {
+      getStateEvents: (type: string, stateKey: string) =>
+        type === EventType.RoomMember && stateKey === "@me:example.org"
+          ? invite
+          : undefined,
+    },
+    getDMInviter: () => undefined,
+    getInvitedAndJoinedMemberCount: () => 2,
+    getLastActiveTimestamp: () => 0,
+    getMyMembership: () => "invite",
+    guessDMUserId: () => "@alice:example.org",
+    myUserId: "@me:example.org",
+    name: "",
+    roomId: "!invite:example.org",
+  } as unknown as Room;
+  const client = {
+    getRooms: () => [room],
+  } as unknown as MatrixClient;
+
+  assert.deepEqual(getPendingDirectRoomInvites(client), [
+    {
+      inviterUserId: "@alice:example.org",
+      name: "@alice:example.org",
+      roomId: "!invite:example.org",
+    },
+  ]);
 });
 
 function fakeRoom(options: {

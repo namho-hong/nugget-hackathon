@@ -134,21 +134,21 @@ async function createDirectRoomPane(
   return pane;
 }
 
-function findDirectRoomPane(
+export function findDirectRoomPane(
   workspace: CmuxWorkspace,
   sourcePaneRef: string | null,
   knownDirectRoomIds: ReadonlySet<string>,
 ): CmuxPane | null {
-  return (
-    (workspace.panes ?? []).find((pane) => {
-      if (pane.ref === sourcePaneRef) {
-        return false;
-      }
+  const panes = workspace.panes ?? [];
+  const isReusablePane = (pane: CmuxPane): boolean =>
+    (pane.surfaces ?? []).some((surface) =>
+      isReusableChatRoomSurface(surface, knownDirectRoomIds),
+    );
 
-      return (pane.surfaces ?? []).some((surface) =>
-        isAnyDirectRoomSurface(surface, knownDirectRoomIds),
-      );
-    }) ?? null
+  return (
+    panes.find((pane) => pane.ref !== sourcePaneRef && isReusablePane(pane)) ??
+    panes.find((pane) => pane.ref === sourcePaneRef && isReusablePane(pane)) ??
+    null
   );
 }
 
@@ -180,6 +180,18 @@ function isAnyDirectRoomSurface(
   }
 
   return false;
+}
+
+function isReusableChatRoomSurface(
+  surface: CmuxSurface,
+  knownDirectRoomIds: ReadonlySet<string>,
+): boolean {
+  if (isAnyDirectRoomSurface(surface, knownDirectRoomIds)) {
+    return true;
+  }
+
+  const haystack = surfaceHaystack(surface);
+  return haystack.includes("nugget") && /\broom\b/.test(haystack);
 }
 
 function isDirectRoomSurface(surface: CmuxSurface, roomId: string): boolean {

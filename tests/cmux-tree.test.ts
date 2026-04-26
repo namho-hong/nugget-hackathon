@@ -8,12 +8,14 @@ import {
   getWorkspaces,
   parseCmuxTreeJson,
 } from "../src/cmux/client.js";
+import { findDirectRoomPane } from "../src/cmux/dm-controller.js";
 import { createThreadAgentSurface } from "../src/cmux/sidecar-pane.js";
 import {
   WorkspaceController,
   findNuggetWorkspace,
   findReusableRoomPane,
   findWorkspaceControllerSurface,
+  roomPaneResizeAmount,
   shouldReuseRoomSurface,
   workspaceDescription,
   workspaceScore,
@@ -77,11 +79,32 @@ test("stale room surfaces are reused only after respawn and focus both succeed",
   assert.equal(shouldReuseRoomSurface(false, false), false);
 });
 
+test("workspace first room resize amount targets a 2:8 picker-to-room split", () => {
+  assert.equal(roomPaneResizeAmount(100), 30);
+  assert.equal(roomPaneResizeAmount(120), 36);
+  assert.equal(roomPaneResizeAmount(160), 48);
+  assert.equal(roomPaneResizeAmount(undefined), 36);
+});
+
 test("workspace room opens reuse an existing non-picker room pane", () => {
   const tree = parseCmuxTreeJson(fixture("cmux-tree-workspace.json"));
   const workspace = findNuggetWorkspace(tree, "!space:example.org", "Product");
 
   assert.equal(findReusableRoomPane(workspace!, "pane:1")?.ref, "pane:2");
+});
+
+test("direct rooms reuse the workspace room pane as another surface", () => {
+  const tree = parseCmuxTreeJson(fixture("cmux-tree-workspace.json"));
+  const workspace = findNuggetWorkspace(tree, "!space:example.org", "Product");
+
+  assert.equal(findDirectRoomPane(workspace!, "pane:1", new Set())?.ref, "pane:2");
+});
+
+test("direct rooms can reuse the current pane when it already contains chat surfaces", () => {
+  const tree = parseCmuxTreeJson(fixture("cmux-tree-workspace.json"));
+  const workspace = findNuggetWorkspace(tree, "!space:example.org", "Product");
+
+  assert.equal(findDirectRoomPane(workspace!, "pane:2", new Set())?.ref, "pane:2");
 });
 
 test("workspace room pane reuse prefers the last opened room surface pane", () => {
@@ -224,4 +247,123 @@ test("thread and agent surfaces reuse the shared sidecar pane", async () => {
     workspaceRef: "workspace:1",
   });
   assert.deepEqual(calls, [["newSurface", "pane:sidecar", "workspace:1"]]);
+});
+
+test("thread and agent surfaces reuse the chat room right pane when markers are missing", async () => {
+  const tree = parseCmuxTreeJson(
+    JSON.stringify({
+      windows: [
+        {
+          workspaces: [
+            {
+              ref: "workspace:1",
+              panes: [
+                {
+                  index: 0,
+                  ref: "pane:picker",
+                  surfaces: [{ ref: "surface:picker", title: "nugget workspace-controller" }],
+                },
+                {
+                  index: 1,
+                  ref: "pane:room",
+                  surfaces: [{ ref: "surface:room", title: "nugget room !room:example.org" }],
+                },
+                {
+                  index: 2,
+                  ref: "pane:right",
+                  surfaces: [{ ref: "surface:thread", title: "dlCMUX_WORKSPACE_ID =1 =" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  const workspace = getWorkspaces(tree)[0]!;
+  const calls: string[][] = [];
+  const cmux = {
+    newSurface: async (options: { paneRef: string; workspaceRef: string }) => {
+      calls.push(["newSurface", options.paneRef, options.workspaceRef]);
+      return {
+        paneRef: options.paneRef,
+        surfaceRef: "surface:new",
+        workspaceRef: options.workspaceRef,
+      };
+    },
+    newSplit: async () => {
+      throw new Error("should not split");
+    },
+  } as unknown as CmuxClient;
+
+  const target = await createThreadAgentSurface(cmux, {
+    sourcePaneRef: "pane:room",
+    sourceSurfaceRef: "surface:room",
+    workspace,
+    workspaceRef: "workspace:1",
+  });
+
+  assert.deepEqual(target, {
+    paneRef: "pane:right",
+    surfaceRef: "surface:new",
+    workspaceRef: "workspace:1",
+  });
+  assert.deepEqual(calls, [["newSurface", "pane:right", "workspace:1"]]);
+});
+
+test("agent launches from the right pane stay in that pane as new surfaces", async () => {
+  const tree = parseCmuxTreeJson(
+    JSON.stringify({
+      windows: [
+        {
+          workspaces: [
+            {
+              ref: "workspace:1",
+              panes: [
+                {
+                  index: 0,
+                  ref: "pane:room",
+                  surfaces: [{ ref: "surface:room", title: "nugget room !room:example.org" }],
+                },
+                {
+                  index: 1,
+                  ref: "pane:right",
+                  surfaces: [{ ref: "surface:agent", title: "nugget-hackathon" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  const workspace = getWorkspaces(tree)[0]!;
+  const calls: string[][] = [];
+  const cmux = {
+    newSurface: async (options: { paneRef: string; workspaceRef: string }) => {
+      calls.push(["newSurface", options.paneRef, options.workspaceRef]);
+      return {
+        paneRef: options.paneRef,
+        surfaceRef: "surface:new",
+        workspaceRef: options.workspaceRef,
+      };
+    },
+    newSplit: async () => {
+      throw new Error("should not split");
+    },
+  } as unknown as CmuxClient;
+
+  const target = await createThreadAgentSurface(cmux, {
+    sourcePaneRef: "pane:right",
+    sourceSurfaceRef: "surface:agent",
+    workspace,
+    workspaceRef: "workspace:1",
+  });
+
+  assert.deepEqual(target, {
+    paneRef: "pane:right",
+    surfaceRef: "surface:new",
+    workspaceRef: "workspace:1",
+  });
+  assert.deepEqual(calls, [["newSurface", "pane:right", "workspace:1"]]);
 });

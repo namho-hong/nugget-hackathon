@@ -232,6 +232,7 @@ async function runInteractiveChat(
   );
 
   let inputBuffer = "";
+  const pendingMessages: string[] = [];
   let notice = mode.type === "thread" ? "Thread view. Type /help for commands." : "Type /help for commands.";
   let submitting = false;
   let scrollOffsetFromBottom = 0;
@@ -306,7 +307,7 @@ async function runInteractiveChat(
         mode.type === "thread" ? mode.threadRootEventId : undefined,
       );
       const visibleInput = sliceDisplayTextFromEnd(inputBuffer, Math.max(1, width - 3));
-      const composer = renderComposer(visibleInput, submitting, width, selectionMode);
+      const composer = renderComposer(visibleInput, submitting, pendingMessages.length, width, selectionMode);
       const frame = [...header, ...paddedHistory, ...markerLines, ...slashLines, ...composer];
       const cursorRow =
         header.length + paddedHistory.length + markerLines.length + slashLines.length + 2;
@@ -340,7 +341,19 @@ async function runInteractiveChat(
     const submitText = async (rawText: string): Promise<void> => {
       const text = rawText.trim();
 
-      if (text.length === 0 || submitting) {
+      if (text.length === 0) {
+        return;
+      }
+
+      if (submitting) {
+        if (!text.startsWith("/") && parseAgentMention(text).type !== "agent") {
+          inputBuffer = "";
+          pendingMessages.push(text);
+          render();
+          return;
+        }
+
+        setNotice("Wait for the current operation before submitting commands.");
         return;
       }
 
@@ -379,6 +392,7 @@ async function runInteractiveChat(
         } catch (error) {
           submitting = false;
           setNotice(`Leave failed for ${room.roomId}: ${formatError(error)}`);
+          void flushPendingMessages();
         }
 
         return;
@@ -427,6 +441,7 @@ async function runInteractiveChat(
         } finally {
           submitting = false;
           render();
+          void flushPendingMessages();
         }
 
         return;
@@ -482,6 +497,7 @@ async function runInteractiveChat(
         } finally {
           submitting = false;
           render();
+          void flushPendingMessages();
         }
 
         return;
@@ -494,32 +510,59 @@ async function runInteractiveChat(
       }
 
       inputBuffer = "";
+      pendingMessages.push(text);
+      void flushPendingMessages();
+    };
+
+    const flushPendingMessages = async (): Promise<void> => {
+      if (submitting || pendingMessages.length === 0) {
+        return;
+      }
+
       submitting = true;
       render();
 
+      let activeMessage: string | null = null;
+
       try {
-        if (mode.type === "thread") {
-          const sentEvent = await sendThreadMessage(
-            client,
-            room.roomId,
-            mode.threadRootEventId,
-            getLatestThreadReplyTarget(threadEvents, mode.threadRootEventId),
-            text,
-          );
+        while (pendingMessages.length > 0 && !closed) {
+          activeMessage = pendingMessages.shift() ?? null;
 
-          appendThreadEvent(threadEvents, seenEventIds, sentEvent);
-        } else {
-          await client.sendMessage(room.roomId, {
-            body: text,
-            msgtype: MsgType.Text,
-          });
-        }
+          if (!activeMessage) {
+            continue;
+          }
 
-        if (!syncNoticeActive) {
-          setNotice("Sent.");
+          if (mode.type === "thread") {
+            const sentEvent = await sendThreadMessage(
+              client,
+              room.roomId,
+              mode.threadRootEventId,
+              getLatestThreadReplyTarget(threadEvents, mode.threadRootEventId),
+              activeMessage,
+            );
+
+            appendThreadEvent(threadEvents, seenEventIds, sentEvent);
+          } else {
+            await client.sendMessage(room.roomId, {
+              body: activeMessage,
+              msgtype: MsgType.Text,
+            });
+          }
+
+          activeMessage = null;
+
+          if (!syncNoticeActive) {
+            setNotice(pendingMessages.length > 0 ? `Sent. ${pendingMessages.length} queued.` : "Sent.");
+          }
         }
       } catch (error) {
-        setNotice(`Send failed in ${room.roomId}: ${formatError(error)}`);
+        const unsentCount = (activeMessage ? 1 : 0) + pendingMessages.length;
+        pendingMessages.length = 0;
+        setNotice(
+          `Send failed in ${room.roomId}: ${formatError(error)}${
+            unsentCount > 1 ? ` ${unsentCount} messages were not sent.` : ""
+          }`,
+        );
       } finally {
         submitting = false;
         render();
@@ -603,6 +646,7 @@ async function runInteractiveChat(
       } finally {
         submitting = false;
         render();
+        void flushPendingMessages();
       }
     };
 
@@ -691,10 +735,6 @@ async function runInteractiveChat(
     const onKeypress = (text: string, key: KeypressEvent): void => {
       if (key.ctrl && key.name === "c") {
         finish({ type: "quit" });
-        return;
-      }
-
-      if (submitting) {
         return;
       }
 
@@ -987,10 +1027,19 @@ function canOpenThreads(mode: ChatViewMode): boolean {
 function renderComposer(
   input: string,
   submitting: boolean,
+  pendingMessageCount: number,
   width: number,
   selectionMode: boolean,
 ): string[] {
-  const prompt = selectionMode ? "> selecting..." : submitting ? "> sending..." : `> ${input}`;
+  const prompt = selectionMode
+    ? "> selecting..."
+    : input.length > 0
+      ? `> ${input}`
+      : submitting
+        ? pendingMessageCount > 0
+          ? `> sending... ${pendingMessageCount} queued`
+          : "> sending..."
+        : "> ";
 
   return [
     "",

@@ -297,12 +297,9 @@ async function selectHomeActionFromMatrix(): Promise<HomeAction> {
       await saveAppState(prunedState);
     }
 
-    const joinedDirectUserIds = new Set(
-      directMessages.flatMap((directMessage) => directMessage.userIds),
-    );
     const pendingDirectInvites = getPendingDirectRoomInvites(client, {
       excludeRoomIds: childRooms.roomIds,
-    }).filter((invite) => !joinedDirectUserIds.has(invite.inviterUserId));
+    });
     const pendingWorkspaceInvites = getPendingSpaceInvites(client);
     const openDirectRoomIds = await getOpenDirectRoomIds(
       new Set(directMessages.map((directMessage) => directMessage.roomId)),
@@ -346,6 +343,10 @@ async function handleHomeAction(action: HomeAction): Promise<CommandResult> {
   }
 
   if (action.type === "home") {
+    return handleDefaultHome();
+  }
+
+  if (action.type === "refresh") {
     return handleDefaultHome();
   }
 
@@ -945,6 +946,9 @@ async function runWorkspacePickerForSpace(
     },
     onJoinRoom: async (room) => {
       await joinRoom(client, room.roomId, { viaServers: room.viaServers });
+    },
+    onLeaveWorkspace: async () => {
+      await leaveRoom(client, spaceId);
     },
     onOpenRoom: (roomId) => controller.openRoom(roomId),
     title: `Workspace: ${space.name}`,

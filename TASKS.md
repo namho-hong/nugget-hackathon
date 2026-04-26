@@ -71,6 +71,162 @@ Manual live Matrix/cmux verification still requires a Matrix account and a
 running cmux session. `./nugget doctor` reported cmux unavailable in this
 sandboxed run because the cmux socket was not accessible.
 
+# Workspace Room Pane Ratio
+
+## Goal
+
+When the workspace picker opens the first room beside itself, size the new room
+pane to roughly 80% of the split width and leave the picker at roughly 20%.
+
+## Definition of Done
+
+- [x] Confirm cmux has a pane resize API usable from Nugget.
+- [x] First workspace room split computes a resize amount from the picker width.
+- [x] Existing room pane reuse does not resize again.
+- [x] Unit coverage verifies the 2:8 resize amount calculation.
+- [x] `pnpm build` passes.
+- [x] Relevant tests pass.
+- [x] Working diff is reviewed for unrelated edits.
+
+## Checklist
+
+- [x] Inspect workspace controller and cmux client split/resize flow.
+- [x] Check local cmux CLI/API support for pane resize.
+- [x] Replace fixed resize amount with calculated 2:8 amount.
+- [x] Add focused test coverage.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+## Verification Commands
+
+```sh
+pnpm build
+pnpm test
+git diff --check
+```
+
+Manual verification requiring Matrix account and cmux:
+
+```sh
+./nugget workspace "<joined-space-id>"
+# Open the first room and confirm picker:room width is approximately 2:8.
+```
+
+## Current Status
+
+Investigation found `cmux resize-pane` and the raw `pane.resize` method are
+available. The CLI accepts tmux-style directional resizing, not direct ratios,
+so Nugget now calculates a cell amount and keeps the resize best-effort.
+Local verification passed: `pnpm build`, `pnpm test`, and `git diff --check`.
+Manual live layout verification still requires opening a Matrix workspace inside
+cmux.
+
+# Shared Chat Room Pane
+
+## Goal
+
+Workspace child rooms and DMs should open as surfaces in the same chat room pane
+instead of creating separate cmux panes for each source.
+
+## Definition of Done
+
+- [x] Confirm the workspace room and DM cmux open paths.
+- [x] DM opens reuse an existing Nugget room pane, including one
+  created by the workspace controller.
+- [x] Existing DM surface focus behavior is preserved.
+- [x] Focused unit coverage verifies DM pane selection reuses a workspace room
+  pane.
+- [x] `pnpm build` passes.
+- [x] Relevant tests pass.
+- [x] Working diff is reviewed for unrelated edits.
+
+## Checklist
+
+- [x] Inspect workspace controller, DM controller, CLI open paths, and cmux tests.
+- [x] Update DM pane selection to share the existing chat room pane.
+- [x] Add focused test coverage.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+## Verification Commands
+
+```sh
+pnpm build
+pnpm test
+git diff --check
+```
+
+Manual verification requiring Matrix account and cmux:
+
+```sh
+./nugget workspace "<joined-space-id>"
+# Open a workspace child room, then open a DM and confirm it appears as another
+# surface in the same room pane.
+```
+
+## Current Status
+
+Investigation found `WorkspaceController` already reuses any existing Nugget
+room pane, while `dm-controller` only searched known DM room surfaces before
+splitting. `dm-controller` now chooses an existing Nugget room pane for new DM
+surfaces, preferring a non-source pane but reusing the current pane when it
+already contains chat surfaces. Local verification passed: `pnpm build`,
+`pnpm test`, and `git diff --check`. Live Matrix/cmux layout verification still
+needs a running session.
+
+# Shared Thread Agent Pane
+
+## Goal
+
+Thread views and `@Codex`/`@Claude` agent launches should open as surfaces in
+the chat room's shared right pane instead of creating separate cmux panes.
+
+## Definition of Done
+
+- [x] Confirm thread and agent cmux open paths.
+- [x] Thread opens reuse an existing right-side thread/agent pane.
+- [x] Agent opens reuse the same right-side thread/agent pane.
+- [x] Opening from an existing thread/agent pane creates a new surface there,
+  not another split.
+- [x] Focused unit coverage verifies shared pane selection for thread and agent
+  surfaces.
+- [x] `pnpm build` passes.
+- [x] Relevant tests pass.
+- [x] Working diff is reviewed for unrelated edits.
+
+## Checklist
+
+- [x] Inspect sidecar, thread, agent, CLI, and cmux tests.
+- [x] Tighten shared right-pane selection for thread/agent surfaces.
+- [x] Add focused test coverage.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+## Verification Commands
+
+```sh
+pnpm build
+pnpm test
+git diff --check
+```
+
+Manual verification requiring Matrix account and cmux:
+
+```sh
+./nugget workspace "<joined-space-id>"
+# Open a room, open a thread, then @Codex/@Claude and confirm they appear as
+# surfaces in the same right pane.
+```
+
+## Current Status
+
+Investigation found thread and agent launches share `createThreadAgentSurface`,
+but pane reuse depends on detecting an existing thread/agent pane. Implementation
+now also treats the pane immediately to the right of a Nugget room pane as the
+shared thread/agent pane when cmux title markers are missing or mangled. Local
+verification passed: `pnpm build`, `pnpm test`, and `git diff --check`. Diff
+review found pre-existing/shared edits in other files; they were left intact.
+
 # Join Leave And Invite UX
 
 ## Goal
@@ -89,7 +245,7 @@ chat view.
 - [x] Chat `/leave` leaves the room and exits the chat view after success.
 - [x] CLI and slash help list the new implemented commands.
 - [x] `pnpm build` passes.
-- [ ] Working diff is reviewed for unrelated edits.
+- [x] Working diff is reviewed for unrelated edits.
 
 ## Checklist
 
@@ -102,7 +258,7 @@ chat view.
 - [x] Wire CLI join, leave, and invite commands.
 - [x] Wire chat `/leave` and shared `/invite`.
 - [x] Run verification commands.
-- [ ] Review working diff for accidental unrelated edits.
+- [x] Review working diff for accidental unrelated edits.
 
 ## Verification Commands
 
@@ -127,6 +283,57 @@ Manual verification requiring Matrix account:
 Implementation is complete at build level. Inspection found that pending
 DM/workspace invite visibility, accept, and reject flows already existed in
 Home, and `waitForRoomMembership` already existed in `src/matrix/client.ts`.
+
+# Workspace Leave Action
+
+## Goal
+
+Allow a user who has opened a Matrix workspace picker to leave that workspace
+from the picker actions, with a Home refresh action available for stale Matrix
+state after returning.
+
+## Definition of Done
+
+- [x] Workspace picker exposes a `Leave workspace` action.
+- [x] Selecting the action leaves the Matrix Space and returns to Home.
+- [x] Failed leaves keep the picker open with an actionable error.
+- [x] Home exposes a `Refresh` action.
+- [x] Home `r` shortcut refreshes when available.
+- [x] Focused unit coverage verifies the picker option is present.
+- [x] `pnpm build` passes.
+- [x] Relevant tests pass.
+- [x] Working diff is reviewed for unrelated edits.
+
+## Checklist
+
+- [x] Inspect workspace picker, CLI workspace controller, and membership helper.
+- [x] Add picker action plumbing for leaving the workspace.
+- [x] Wire workspace leave to the existing Matrix leave helper.
+- [x] Add Home refresh action and shortcut.
+- [x] Add focused test coverage.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+## Verification Commands
+
+```sh
+pnpm build
+pnpm test
+git diff --check
+```
+
+Manual verification requiring Matrix account and cmux:
+
+```sh
+./nugget workspace "<joined-space-id>"
+# Choose Actions -> Leave workspace and confirm it returns to Home.
+```
+
+## Current Status
+
+Implementation is complete at build/test level. Local verification passed:
+`pnpm test`, `pnpm build`, and `git diff --check`. Diff review found unrelated
+pre-existing/shared changes in other files; they were left intact.
 
 Added:
 
@@ -913,6 +1120,10 @@ Implementation is complete with local verification:
 
 - `pnpm build`
 - `pnpm test`
+- `git diff --check`
+
+Diff review found pre-existing/shared edits in `TASKS.md`, `src/cli.ts`, cmux,
+chat, workspace picker, and related tests. They were left intact.
 - `pnpm smoke`
 - `git diff --check`
 
@@ -1394,3 +1605,60 @@ Verification passed:
 
 Manual live visual verification still requires opening Nugget against a Matrix
 session.
+
+# DM Invite Visibility
+
+## Goal
+
+Make DM invites visible when one side already has older DM room state.
+
+## Definition of Done
+
+- [x] Existing local DM reuse re-invites the target when they are not already
+  joined or invited.
+- [x] Home shows pending DM invites even when the inviter already has a joined
+  DM with the current account.
+- [x] Focused tests cover the invite visibility and re-invite behavior.
+- [x] `pnpm build` passes.
+- [x] Relevant tests pass.
+- [x] Working diff is reviewed for unrelated edits.
+
+## Checklist
+
+- [x] Inspect DM create, pending invite detection, and home filtering paths.
+- [x] Update DM create reuse to send a re-invite when needed.
+- [x] Stop hiding pending DM invites solely because a joined DM exists.
+- [x] Add focused tests.
+- [x] Run verification commands.
+- [x] Review working diff for accidental unrelated edits.
+
+## Verification Commands
+
+```sh
+pnpm build
+pnpm test
+git diff --check
+```
+
+Manual verification requiring two Matrix accounts:
+
+```sh
+./nugget create-dm "@other:server"
+# From the other account, confirm Home shows a pending DM invite.
+```
+
+## Current Status
+
+Implementation is complete at build and test level. `createDirectRoom()` now
+re-invites the target when it reuses an existing local DM and the target is not
+joined or already invited. Home no longer filters out pending DM invites only
+because the inviter already has a joined DM with the current account.
+
+Verification passed:
+
+- `pnpm build`
+- `pnpm test`
+- `git diff --check`
+
+Diff review found pre-existing/shared edits in `TASKS.md`, `src/cli.ts`, cmux,
+chat, workspace picker, and related tests. They were left intact.

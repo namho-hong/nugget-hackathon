@@ -100,6 +100,7 @@ export async function createDirectRoom(
   const existingRoom = findJoinedDirectRoomForUser(client, targetUserId);
 
   if (existingRoom && (await isJoinedOnServer(client, existingRoom.roomId))) {
+    await ensureDirectRoomInvite(client, existingRoom.roomId, targetUserId);
     return { name: existingRoom.name, roomId: existingRoom.roomId };
   }
 
@@ -238,6 +239,45 @@ async function isJoinedOnServer(client: MatrixClient, roomId: string): Promise<b
     return content.membership === "join";
   } catch {
     return false;
+  }
+}
+
+async function ensureDirectRoomInvite(
+  client: MatrixClient,
+  roomId: string,
+  targetUserId: string,
+): Promise<void> {
+  const membership = await getMemberMembership(client, roomId, targetUserId);
+
+  if (membership === "join" || membership === "invite") {
+    return;
+  }
+
+  try {
+    await client.invite(roomId, targetUserId);
+  } catch (error) {
+    throw new Error(
+      `Found existing DM room ${roomId}, but could not invite ${targetUserId}: ${formatError(error)}`,
+    );
+  }
+}
+
+async function getMemberMembership(
+  client: MatrixClient,
+  roomId: string,
+  userId: string,
+): Promise<string | null> {
+  const localMembership = client.getRoom(roomId)?.getMember(userId)?.membership;
+
+  if (typeof localMembership === "string") {
+    return localMembership;
+  }
+
+  try {
+    const content = await client.getStateEvent(roomId, EventType.RoomMember, userId);
+    return typeof content.membership === "string" ? content.membership : null;
+  } catch {
+    return null;
   }
 }
 

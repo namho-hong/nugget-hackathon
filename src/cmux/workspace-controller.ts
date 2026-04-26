@@ -13,7 +13,9 @@ import {
   type CmuxWorkspace,
 } from "./client.js";
 
-const PICKER_RESIZE_AMOUNT = 40;
+const DEFAULT_WORKSPACE_COLUMNS = 120;
+const EVEN_SPLIT_RATIO = 0.5;
+const ROOM_PANE_RATIO = 0.8;
 const NUGGET_WORKSPACE_PREFIX = "🟨 nugget:";
 
 export interface MatrixWorkspace {
@@ -82,6 +84,9 @@ export class WorkspaceController {
       this.pickerPaneRef,
       this.lastRoomSurfaceRef,
     );
+    const resizeAmount = targetPane
+      ? null
+      : roomPaneResizeAmount(process.stdout.columns);
     const paneSurface = targetPane
       ? await this.cmux.newSurface({
           paneRef: targetPane.ref,
@@ -98,7 +103,7 @@ export class WorkspaceController {
     if (!targetPane && this.pickerPaneRef) {
       this.cmux
         .resizePane({
-          amount: PICKER_RESIZE_AMOUNT,
+          amount: resizeAmount ?? roomPaneResizeAmount(process.stdout.columns),
           direction: "left",
           paneRef: this.pickerPaneRef,
           workspaceRef: this.workspaceRef,
@@ -331,6 +336,18 @@ export function shouldReuseRoomSurface(
   focusSucceeded: boolean,
 ): boolean {
   return respawnSucceeded && focusSucceeded;
+}
+
+export function roomPaneResizeAmount(columns: number | undefined): number {
+  const sourceColumns =
+    typeof columns === "number" && Number.isFinite(columns) && columns > 0
+      ? columns
+      : DEFAULT_WORKSPACE_COLUMNS;
+
+  return Math.max(
+    1,
+    Math.round(sourceColumns * (ROOM_PANE_RATIO - EVEN_SPLIT_RATIO)),
+  );
 }
 
 export function workspaceDescription(spaceId: string): string {

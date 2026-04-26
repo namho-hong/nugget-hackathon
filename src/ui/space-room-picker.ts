@@ -22,6 +22,7 @@ type PickerAction =
   | { type: "join-room"; roomId: string }
   | { type: "accept-room-invite"; roomId: string }
   | { type: "invite-user" }
+  | { type: "leave-workspace" }
   | { type: "refresh" }
   | { type: "home" }
   | { type: "quit" };
@@ -55,11 +56,13 @@ export async function runSpaceRoomPicker(options: {
   onJoinRoom?: (room: SpaceRoom) => Promise<void>;
   onAcceptRoomInvite?: (room: SpaceRoom) => Promise<void>;
   onInviteUser?: (userId: string) => Promise<void>;
+  onLeaveWorkspace?: () => Promise<void>;
   watchRoomActivity?: (onActivity: (roomId: string) => void) => () => void;
   io?: SpaceRoomPickerIo;
 }): Promise<SpaceRoomPickerResult> {
   const io = options.io ?? { input: process.stdin, output: process.stdout };
   const canInviteUser = options.onInviteUser !== undefined;
+  const canLeaveWorkspace = options.onLeaveWorkspace !== undefined;
 
   if (!io.input.isTTY || !io.output.isTTY) {
     const rooms = await options.loadRooms();
@@ -71,6 +74,7 @@ export async function runSpaceRoomPicker(options: {
         io.output.columns ?? 80,
         "",
         canInviteUser,
+        canLeaveWorkspace,
         new Set(),
         false,
       ),
@@ -96,7 +100,7 @@ export async function runSpaceRoomPicker(options: {
       return;
     }
 
-    const selectableCount = selectableOptions(rooms, canInviteUser).length;
+    const selectableCount = selectableOptions(rooms, canInviteUser, canLeaveWorkspace).length;
     selectedIndex = selectableCount === 0 ? 0 : selectedIndex % selectableCount;
     io.output.write(
       `\x1b[2J\x1b[H${renderPicker(
@@ -106,6 +110,7 @@ export async function runSpaceRoomPicker(options: {
         io.output.columns ?? 80,
         notice,
         canInviteUser,
+        canLeaveWorkspace,
         activeRoomIds,
         true,
       )}`,
@@ -158,7 +163,7 @@ export async function runSpaceRoomPicker(options: {
       return;
     }
 
-    const selectable = selectableOptions(rooms, canInviteUser);
+    const selectable = selectableOptions(rooms, canInviteUser, canLeaveWorkspace);
 
     if (selectable.length === 0) {
       return;
@@ -247,6 +252,21 @@ export async function runSpaceRoomPicker(options: {
       return;
     }
 
+    if (selected.action.type === "leave-workspace") {
+      notice = "Leaving workspace...";
+      render();
+
+      try {
+        await options.onLeaveWorkspace?.();
+        finish({ type: "home" });
+      } catch (error) {
+        notice = error instanceof Error ? error.message : String(error);
+        render();
+      }
+
+      return;
+    }
+
     if (!("roomId" in selected.action)) {
       return;
     }
@@ -332,13 +352,14 @@ function renderPicker(
   columns: number,
   notice = "",
   canInviteUser = false,
+  canLeaveWorkspace = false,
   activeRoomIds: ReadonlySet<string> = new Set(),
   useAnsi = false,
 ): string {
   const width = Math.max(20, columns);
   const renderWidth = Math.max(20, Math.min(width, 96));
   const lines = [...renderPickerHeader(title, roomSummary(rooms), renderWidth, useAnsi), ""];
-  const sections = pickerSections(rooms, canInviteUser);
+  const sections = pickerSections(rooms, canInviteUser, canLeaveWorkspace);
   let optionIndex = 0;
 
   for (const section of sections) {
@@ -383,8 +404,9 @@ function renderPicker(
 function selectableOptions(
   rooms: readonly SpaceRoom[],
   canInviteUser: boolean,
+  canLeaveWorkspace: boolean,
 ): PickerOption[] {
-  return pickerOptions(rooms, canInviteUser).filter(
+  return pickerOptions(rooms, canInviteUser, canLeaveWorkspace).filter(
     (option): option is PickerOption => !option.disabled,
   );
 }
@@ -392,13 +414,17 @@ function selectableOptions(
 function pickerOptions(
   rooms: readonly SpaceRoom[],
   canInviteUser: boolean,
+  canLeaveWorkspace: boolean,
 ): AnyPickerOption[] {
-  return pickerSections(rooms, canInviteUser).flatMap((section) => section.options);
+  return pickerSections(rooms, canInviteUser, canLeaveWorkspace).flatMap(
+    (section) => section.options,
+  );
 }
 
 function pickerSections(
   rooms: readonly SpaceRoom[],
   canInviteUser: boolean,
+  canLeaveWorkspace: boolean,
 ): PickerSection[] {
   const roomOptions: AnyPickerOption[] =
     rooms.length === 0
@@ -407,6 +433,15 @@ function pickerSections(
   const actionOptions: PickerOption[] = [
     ...(canInviteUser
       ? [{ label: "Invite user", tag: "invite", action: { type: "invite-user" } } satisfies PickerOption]
+      : []),
+    ...(canLeaveWorkspace
+      ? [
+          {
+            label: "Leave workspace",
+            tag: "leave",
+            action: { type: "leave-workspace" },
+          } satisfies PickerOption,
+        ]
       : []),
     { label: "Refresh rooms", tag: "sync", action: { type: "refresh" } },
     { label: "Home", tag: "home", action: { type: "home" } },

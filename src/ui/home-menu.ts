@@ -48,6 +48,7 @@ export type HomeAction =
   | { type: "accept-dm-invite"; roomId: string }
   | { type: "reject-dm-invite"; roomId: string }
   | { type: "create-dm" }
+  | { type: "refresh" }
   | { type: "home" }
   | { type: "logout" }
   | { type: "quit" };
@@ -229,6 +230,7 @@ function homeSections(home: SelectHomeActionInput): PickerSection[] {
   sections.push({
     title: "Actions",
     options: [
+      { label: "Refresh", tag: "sync", action: { type: "refresh" } },
       { label: "New workspace", tag: "new", action: { type: "create-workspace" } },
       { label: "New DM", tag: "new", action: { type: "create-dm" } },
       { label: "Logout", tag: "acct", action: { type: "logout" } },
@@ -350,6 +352,8 @@ async function selectAction(
   const selectableOptions = sections
     .flatMap((section) => section.options)
     .filter((option): option is PickerOption => !option.disabled);
+  const refreshAction = selectableOptions.find((option) => option.action.type === "refresh")
+    ?.action;
 
   if (!io.input.isTTY || !io.output.isTTY) {
     io.output.write(renderMenu(title, subtitle, sections, -1, io.output.columns ?? 80, false));
@@ -434,6 +438,11 @@ async function selectAction(
           return;
         }
 
+        if (key.name === "r" && refreshAction) {
+          finish(refreshAction);
+          return;
+        }
+
         if (key.name === "return" || key.name === "enter") {
           const selectedOption = selectableOptions[selectedIndex];
 
@@ -493,8 +502,22 @@ function renderMenu(
     lines.push("");
   }
 
-  lines.push(renderPickerFooter("Up/Down or j/k move  Enter selects  q quits", width, useAnsi));
+  lines.push(
+    renderPickerFooter(
+      hasRefreshAction(sections)
+        ? "Up/Down or j/k move  Enter selects  r refreshes  q quits"
+        : "Up/Down or j/k move  Enter selects  q quits",
+      width,
+      useAnsi,
+    ),
+  );
   return `${lines.join("\n")}\n`;
+}
+
+function hasRefreshAction(sections: readonly PickerSection[]): boolean {
+  return sections.some((section) =>
+    section.options.some((option) => !option.disabled && option.action.type === "refresh"),
+  );
 }
 
 function truncate(value: string, maxLength: number): string {

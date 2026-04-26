@@ -31,6 +31,7 @@ export interface CmuxSurfaceResult {
 
 export interface CmuxPane {
   ref: string;
+  index?: number;
   surfaces?: CmuxSurface[];
   selected_surface_ref?: string | null;
 }
