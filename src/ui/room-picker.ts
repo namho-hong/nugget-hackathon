@@ -8,28 +8,40 @@ interface RoomPickerIo {
   output: WriteStream;
 }
 
+export type JoinedRoomSelection =
+  | { type: "open-room"; roomId: string }
+  | { type: "home" }
+  | { type: "quit" };
+
+interface PickerOption {
+  label: string;
+  selection: JoinedRoomSelection;
+}
+
 export async function selectJoinedRoom(
   rooms: readonly JoinedRoom[],
   io: RoomPickerIo = { input: process.stdin, output: process.stdout },
-): Promise<string | null> {
+): Promise<JoinedRoomSelection> {
   if (rooms.length === 0) {
     io.output.write("No joined Matrix rooms found.\n");
-    return null;
+    return { type: "quit" };
   }
 
   if (!io.input.isTTY || !io.output.isTTY) {
     io.output.write(renderRoomPicker(rooms, -1, io.output.columns ?? 80));
-    return null;
+    return { type: "quit" };
   }
 
+  const options = pickerOptions(rooms);
   let selectedIndex = 0;
 
   emitKeypressEvents(io.input);
+  io.input.resume();
   io.input.setRawMode(true);
   io.output.write("\x1b[?25l");
 
   try {
-    return await new Promise<string | null>((resolve) => {
+    return await new Promise<JoinedRoomSelection>((resolve) => {
       const render = (): void => {
         io.output.write(
           `\x1b[2J\x1b[H${renderRoomPicker(rooms, selectedIndex, io.output.columns ?? 80)}`,
@@ -42,40 +54,40 @@ export async function selectJoinedRoom(
         io.output.write("\x1b[?25h\x1b[0m");
       };
 
-      const finish = (roomId: string | null): void => {
+      const finish = (selection: JoinedRoomSelection): void => {
         cleanup();
         io.output.write("\n");
-        resolve(roomId);
+        resolve(selection);
       };
 
       const onKeypress = (_text: string, key: KeypressEvent): void => {
         if (key.ctrl && key.name === "c") {
-          finish(null);
+          finish({ type: "quit" });
           return;
         }
 
         if (key.name === "escape" || key.name === "q") {
-          finish(null);
+          finish({ type: "quit" });
           return;
         }
 
         if (key.name === "up" || key.name === "k") {
-          selectedIndex = (selectedIndex - 1 + rooms.length) % rooms.length;
+          selectedIndex = (selectedIndex - 1 + options.length) % options.length;
           render();
           return;
         }
 
         if (key.name === "down" || key.name === "j") {
-          selectedIndex = (selectedIndex + 1) % rooms.length;
+          selectedIndex = (selectedIndex + 1) % options.length;
           render();
           return;
         }
 
         if (key.name === "return" || key.name === "enter") {
-          const selectedRoom = rooms[selectedIndex];
+          const selectedOption = options[selectedIndex];
 
-          if (selectedRoom) {
-            finish(selectedRoom.roomId);
+          if (selectedOption) {
+            finish(selectedOption.selection);
           }
         }
       };
@@ -100,14 +112,24 @@ function renderRoomPicker(
   const width = Math.max(20, columns);
   const lines = ["Open Room", ""];
 
-  rooms.forEach((room, index) => {
+  pickerOptions(rooms).forEach((option, index) => {
     const prefix = index === selectedIndex ? "> " : "  ";
-    const label = `${room.name}  ${room.roomId}`;
-    lines.push(`${prefix}${truncate(label, width - 4)}`);
+    lines.push(`${prefix}${truncate(option.label, width - 4)}`);
   });
 
-  lines.push("", "Enter opens, Esc quits.");
+  lines.push("", "Enter selects, Esc quits.");
   return `${lines.join("\n")}\n`;
+}
+
+function pickerOptions(rooms: readonly JoinedRoom[]): PickerOption[] {
+  return [
+    ...rooms.map((room) => ({
+      label: `${room.name}  ${room.roomId}`,
+      selection: { type: "open-room", roomId: room.roomId } satisfies JoinedRoomSelection,
+    })),
+    { label: "Home", selection: { type: "home" } },
+    { label: "Quit", selection: { type: "quit" } },
+  ];
 }
 
 function truncate(value: string, maxLength: number): string {

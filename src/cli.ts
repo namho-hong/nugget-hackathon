@@ -17,6 +17,7 @@ import {
   getRoomDisplayName,
   getPendingDirectRoomInvites,
   getJoinedSpaces,
+  getPendingSpaceInvites,
   getSpaceChildRoomIds,
   loginWithSso,
   resolveRoomOrThrow,
@@ -28,11 +29,14 @@ import {
   WorkspaceController,
   getRequiredCmuxContext,
   launchWorkspace,
+  openThreadBesideCurrentSurface,
 } from "./cmux/index.js";
 import { clearSession, loadSession, saveSession } from "./store/index.js";
 import {
   openChatView,
+  openThreadView,
   promptRequired,
+  promptRequiredNavigation,
   runSpaceRoomPicker,
   selectHomeAction,
   selectJoinedRoom,
@@ -70,11 +74,10 @@ Commands:
                     Run the cmux room picker for a Matrix Space.
   open [roomId]     Open a joined Matrix room, or pick one when omitted.
   room <roomId>     Open a joined Matrix room chat view.
+  thread <roomId> <threadRootEventId>
+                    Open a Matrix thread chat view.
   send <roomId> <message...>
                     Send one text message and exit.
-
-Planned:
-  thread
 `;
 
 function readPackageVersion(): string {
@@ -156,6 +159,10 @@ async function run(argv: string[]): Promise<CommandResult> {
     return handleRoomCommand(args.slice(1));
   }
 
+  if (command === "thread") {
+    return handleThreadCommand(args.slice(1));
+  }
+
   if (command === "send") {
     return handleSendCommand(args.slice(1));
   }
@@ -218,10 +225,12 @@ async function selectHomeActionFromMatrix(): Promise<HomeAction> {
     const pendingDirectInvites = getPendingDirectRoomInvites(client, {
       excludeRoomIds: childRooms.roomIds,
     }).filter((invite) => !joinedDirectUserIds.has(invite.inviterUserId));
+    const pendingWorkspaceInvites = getPendingSpaceInvites(client);
     return selectHomeAction({
       accountUserId: session.userId,
       directMessages,
       pendingDirectInvites,
+      pendingWorkspaceInvites,
       warnings: childRooms.warnings,
       workspaces,
     });
@@ -243,6 +252,10 @@ async function handleHomeAction(action: HomeAction): Promise<CommandResult> {
     };
   }
 
+  if (action.type === "home") {
+    return handleDefaultHome();
+  }
+
   if (action.type === "view-all-workspaces") {
     return {
       exitCode: 1,
@@ -253,6 +266,14 @@ async function handleHomeAction(action: HomeAction): Promise<CommandResult> {
 
   if (action.type === "open-workspace") {
     return handleOpenWorkspace(action.spaceId);
+  }
+
+  if (action.type === "accept-workspace-invite") {
+    return handleAcceptWorkspaceInvite(action.spaceId);
+  }
+
+  if (action.type === "reject-workspace-invite") {
+    return handleRejectWorkspaceInvite(action.spaceId);
   }
 
   if (action.type === "open-dm") {
@@ -268,13 +289,11 @@ async function handleHomeAction(action: HomeAction): Promise<CommandResult> {
   }
 
   if (action.type === "create-workspace") {
-    const name = await promptRequired("Workspace name");
-    return handleCreateWorkspace(name);
+    return handleCreateWorkspaceInteractive();
   }
 
   if (action.type === "create-dm") {
-    const userId = await promptRequired("Matrix user ID");
-    return handleCreateDm(userId);
+    return handleCreateDmInteractive();
   }
 
   return {
@@ -303,8 +322,7 @@ async function handleWhoami(): Promise<CommandResult> {
 }
 
 async function handleCreateWorkspaceCommand(args: string[]): Promise<CommandResult> {
-  const name = args.length > 0 ? args.join(" ") : await promptRequired("Workspace name");
-  return handleCreateWorkspace(name);
+  return handleCreateWorkspaceInteractive(args.length > 0 ? args.join(" ") : undefined);
 }
 
 async function handleCreateRoomCommand(args: string[]): Promise<CommandResult> {
@@ -315,8 +333,7 @@ async function handleCreateRoomCommand(args: string[]): Promise<CommandResult> {
 }
 
 async function handleCreateDmCommand(args: string[]): Promise<CommandResult> {
-  const userId = args[0] ?? (await promptRequired("Matrix user ID"));
-  return handleCreateDm(userId);
+  return handleCreateDmInteractive(args[0]);
 }
 
 async function handleWorkspaceCommand(args: string[]): Promise<CommandResult> {
@@ -334,26 +351,24 @@ async function handleWorkspaceCommand(args: string[]): Promise<CommandResult> {
     return handleOpenWorkspace(requestedSpaceId);
   }
 
-  return withMatrixClient(async (client) => {
+  const result = await withMatrixClient(async (client) => {
     const action = await selectWorkspaceAction(await getJoinedSpaces(client));
 
+    if (action.type === "home") {
+      return { type: "home" } as const;
+    }
+
     if (action.type !== "open-workspace") {
-      return {
-        exitCode: 0,
-        output: "",
-        stream: "stdout",
-      };
+      return { type: "quit" } as const;
     }
 
     const workspace = resolveJoinedSpace(client, action.spaceId);
     await launchWorkspace(workspace);
 
-    return {
-      exitCode: 0,
-      output: "",
-      stream: "stdout",
-    };
+    return { type: "quit" } as const;
   });
+
+  return handleNavigationResult(result);
 }
 
 async function handleWorkspaceControllerCommand(args: string[]): Promise<CommandResult> {
@@ -375,24 +390,23 @@ async function handleWorkspaceControllerCommand(args: string[]): Promise<Command
     context.surfaceRef,
   );
 
-  return withMatrixClient(async (client) => {
+  const result = await withMatrixClient(async (client) => {
     const space = resolveJoinedSpace(client, spaceId);
 
     await controller.hydrateOpenRooms(
       getJoinedSpaceRooms(client, spaceId).map((room) => room.roomId),
     );
-    await runSpaceRoomPicker({
+    return await runSpaceRoomPicker({
       loadRooms: () => getJoinedSpaceRooms(client, spaceId),
+      onInviteUser: async (userId) => {
+        await client.invite(spaceId, userId);
+      },
       onOpenRoom: (roomId) => controller.openRoom(roomId),
       title: `Workspace: ${space.name}`,
     });
-
-    return {
-      exitCode: 0,
-      output: "",
-      stream: "stdout",
-    };
   });
+
+  return handleNavigationResult(result);
 }
 
 async function handleOpenCommand(args: string[]): Promise<CommandResult> {
@@ -410,25 +424,20 @@ async function handleOpenCommand(args: string[]): Promise<CommandResult> {
     return handleOpenRoom(requestedRoomId);
   }
 
-  return withMatrixClient(async (client) => {
-    const roomId = await selectJoinedRoom(getJoinedRooms(client));
+  const result = await withMatrixClient(async (client) => {
+    const selection = await selectJoinedRoom(getJoinedRooms(client));
 
-    if (!roomId) {
-      return {
-        exitCode: 0,
-        output: "",
-        stream: "stdout",
-      };
+    if (selection.type !== "open-room") {
+      return selection;
     }
 
-    await openChatView(client, roomId);
-
-    return {
-      exitCode: 0,
-      output: "",
-      stream: "stdout",
-    };
+    return await openChatView(client, selection.roomId, {
+      onOpenThread: (threadRootEventId) =>
+        openThreadBesideCurrentSurface(selection.roomId, threadRootEventId),
+    });
   });
+
+  return handleNavigationResult(result);
 }
 
 async function handleRoomCommand(args: string[]): Promise<CommandResult> {
@@ -443,6 +452,26 @@ async function handleRoomCommand(args: string[]): Promise<CommandResult> {
   }
 
   return handleOpenRoom(roomId);
+}
+
+async function handleThreadCommand(args: string[]): Promise<CommandResult> {
+  const roomId = args[0];
+  const threadRootEventId = args[1];
+
+  if (!roomId || !threadRootEventId || args.length > 2) {
+    return {
+      exitCode: 1,
+      output: "Usage: nugget thread <roomId> <threadRootEventId>\n",
+      stream: "stderr",
+    };
+  }
+
+  const result = await withMatrixClient(async (client) => {
+    resolveRoomOrThrow(client, roomId);
+    return await openThreadView(client, roomId, threadRootEventId);
+  });
+
+  return handleNavigationResult(result);
 }
 
 async function handleSendCommand(args: string[]): Promise<CommandResult> {
@@ -473,15 +502,14 @@ async function handleSendCommand(args: string[]): Promise<CommandResult> {
 }
 
 async function handleOpenRoom(roomId: string): Promise<CommandResult> {
-  return withMatrixClient(async (client) => {
-    await openChatView(client, roomId);
-
-    return {
-      exitCode: 0,
-      output: "",
-      stream: "stdout",
-    };
+  const result = await withMatrixClient(async (client) => {
+    return await openChatView(client, roomId, {
+      onOpenThread: (threadRootEventId) =>
+        openThreadBesideCurrentSurface(roomId, threadRootEventId),
+    });
   });
+
+  return handleNavigationResult(result);
 }
 
 async function handleOpenWorkspace(spaceId: string): Promise<CommandResult> {
@@ -528,6 +556,44 @@ async function handleCreateWorkspace(name: string): Promise<CommandResult> {
   };
 }
 
+async function handleCreateWorkspaceInteractive(
+  initialName?: string,
+): Promise<CommandResult> {
+  let nextName = initialName;
+
+  while (true) {
+    const name = nextName ?? (await promptCreationValue("Workspace name"));
+    nextName = undefined;
+
+    if (typeof name !== "string") {
+      return handleNavigationResult(name);
+    }
+
+    const cleanName = name.trim();
+
+    if (cleanName.length === 0) {
+      const message = "A workspace name is required.";
+
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        throw new Error(message);
+      }
+
+      process.stdout.write(`${message}\n`);
+      continue;
+    }
+
+    try {
+      return await handleCreateWorkspace(cleanName);
+    } catch (error) {
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        throw error;
+      }
+
+      process.stdout.write(`Could not create workspace: ${formatError(error)}\n`);
+    }
+  }
+}
+
 async function handleCreateMatrixRoom(
   name: string,
   spaceId: string | undefined,
@@ -551,20 +617,55 @@ async function handleCreateMatrixRoom(
 }
 
 async function handleCreateDm(userId: string): Promise<CommandResult> {
-  return withMatrixClient(async (client) => {
+  const result = await withMatrixClient(async (client) => {
     const created = await createDirectRoom(client, userId);
-    await openChatView(client, created.roomId);
-
-    return {
-      exitCode: 0,
-      output: "",
-      stream: "stdout",
-    };
+    return await openChatView(client, created.roomId, {
+      onOpenThread: (threadRootEventId) =>
+        openThreadBesideCurrentSurface(created.roomId, threadRootEventId),
+    });
   });
+
+  return handleNavigationResult(result);
+}
+
+async function handleCreateDmInteractive(initialUserId?: string): Promise<CommandResult> {
+  let nextUserId = initialUserId;
+
+  while (true) {
+    const userId = nextUserId ?? (await promptCreationValue("Matrix user ID"));
+    nextUserId = undefined;
+
+    if (typeof userId !== "string") {
+      return handleNavigationResult(userId);
+    }
+
+    const cleanUserId = userId.trim();
+
+    if (!isMatrixUserId(cleanUserId)) {
+      const message = `Invalid Matrix user ID: ${userId}`;
+
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        throw new Error(message);
+      }
+
+      process.stdout.write(`${message}\n`);
+      continue;
+    }
+
+    try {
+      return await handleCreateDm(cleanUserId);
+    } catch (error) {
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        throw error;
+      }
+
+      process.stdout.write(`Could not create DM: ${formatError(error)}\n`);
+    }
+  }
 }
 
 async function handleAcceptDmInvite(roomId: string): Promise<CommandResult> {
-  return withMatrixClient(async (client) => {
+  const result = await withMatrixClient(async (client) => {
     const invite = getPendingDirectRoomInvites(client).find((item) => item.roomId === roomId);
 
     if (!invite) {
@@ -585,11 +686,50 @@ async function handleAcceptDmInvite(roomId: string): Promise<CommandResult> {
       }
     }
 
-    await openChatView(client, joinedRoom.roomId);
+    return await openChatView(client, joinedRoom.roomId, {
+      onOpenThread: (threadRootEventId) =>
+        openThreadBesideCurrentSurface(joinedRoom.roomId, threadRootEventId),
+    });
+  });
+
+  return handleNavigationResult(result);
+}
+
+async function handleAcceptWorkspaceInvite(spaceId: string): Promise<CommandResult> {
+  return withMatrixClient(async (client) => {
+    const invite = getPendingSpaceInvites(client).find((item) => item.roomId === spaceId);
+
+    if (!invite) {
+      throw new Error(`Workspace invite ${spaceId} is no longer pending.`);
+    }
+
+    const joinedSpace = await client.joinRoom(spaceId);
+    await launchWorkspace({
+      name: getRoomDisplayName(joinedSpace),
+      roomId: joinedSpace.roomId,
+    });
 
     return {
       exitCode: 0,
       output: "",
+      stream: "stdout",
+    };
+  });
+}
+
+async function handleRejectWorkspaceInvite(spaceId: string): Promise<CommandResult> {
+  return withMatrixClient(async (client) => {
+    const invite = getPendingSpaceInvites(client).find((item) => item.roomId === spaceId);
+
+    if (!invite) {
+      throw new Error(`Workspace invite ${spaceId} is no longer pending.`);
+    }
+
+    await client.leave(spaceId);
+
+    return {
+      exitCode: 0,
+      output: `Rejected workspace invite from ${invite.inviterUserId}.\n`,
       stream: "stdout",
     };
   });
@@ -613,6 +753,32 @@ async function handleRejectDmInvite(roomId: string): Promise<CommandResult> {
   });
 }
 
+async function handleNavigationResult(result: {
+  type: "home" | "quit";
+}): Promise<CommandResult> {
+  if (result.type === "home") {
+    return handleDefaultHome();
+  }
+
+  return {
+    exitCode: 0,
+    output: "",
+    stream: "stdout",
+  };
+}
+
+async function promptCreationValue(
+  label: string,
+): Promise<string | { type: "home" | "quit" }> {
+  const result = await promptRequiredNavigation(label);
+
+  if (result.type === "value") {
+    return result.value;
+  }
+
+  return result;
+}
+
 function parseCreateRoomArgs(args: string[]): { name?: string; spaceId?: string } {
   if (args.length === 0) {
     return {};
@@ -630,6 +796,10 @@ function parseCreateRoomArgs(args: string[]): { name?: string; spaceId?: string 
   return {
     name: args.join(" "),
   };
+}
+
+function isMatrixUserId(value: string): boolean {
+  return /^@[^:\s]+:.+$/.test(value);
 }
 
 function parseLoginAction(value: string | undefined): LoginAction | null {

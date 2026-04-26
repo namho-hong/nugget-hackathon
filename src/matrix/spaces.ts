@@ -2,6 +2,7 @@ import {
   EventType,
   type MatrixClient,
 } from "matrix-js-sdk";
+import type { Room } from "matrix-js-sdk";
 
 import {
   compareRooms,
@@ -12,6 +13,10 @@ import {
 } from "./rooms.js";
 
 export interface JoinedSpace extends JoinedRoom {}
+
+export interface PendingSpaceInvite extends JoinedRoom {
+  inviterUserId: string;
+}
 
 export interface SpaceChildRoomResult {
   roomIds: Set<string>;
@@ -24,6 +29,15 @@ export async function getJoinedSpaces(client: MatrixClient): Promise<JoinedSpace
     .filter((room) => isJoinedRoom(room))
     .filter((room) => isSpaceRoom(room))
     .map((room) => roomSummary(room))
+    .sort(compareRooms);
+}
+
+export function getPendingSpaceInvites(client: MatrixClient): PendingSpaceInvite[] {
+  return client
+    .getRooms()
+    .filter((room) => room.getMyMembership() === "invite")
+    .filter((room) => isSpaceRoom(room))
+    .map((room) => pendingSpaceInviteSummary(room))
     .sort(compareRooms);
 }
 
@@ -72,4 +86,18 @@ export function getJoinedSpaceRooms(client: MatrixClient, spaceId: string): Join
     .filter((room) => !isSpaceRoom(room))
     .map((room) => roomSummary(room))
     .sort(compareRooms);
+}
+
+function pendingSpaceInviteSummary(room: Room): PendingSpaceInvite {
+  const summary = roomSummary(room);
+  const inviteEvent = room.currentState.getStateEvents(
+    EventType.RoomMember,
+    room.myUserId,
+  );
+  const inviterUserId = inviteEvent?.getSender() ?? "unknown";
+
+  return {
+    ...summary,
+    inviterUserId,
+  };
 }

@@ -21,15 +21,26 @@ export interface HomePendingDirectInvite {
   lastActivityTs?: number;
 }
 
+export interface HomePendingWorkspaceInvite {
+  roomId: string;
+  name: string;
+  inviterUserId: string;
+  lastActivityTs?: number;
+}
+
 export type HomeAction =
   | { type: "open-workspace"; spaceId: string }
   | { type: "view-all-workspaces" }
   | { type: "create-workspace" }
   | { type: "open-dm"; roomId: string }
+  | { type: "review-workspace-invite"; spaceId: string }
+  | { type: "accept-workspace-invite"; spaceId: string }
+  | { type: "reject-workspace-invite"; spaceId: string }
   | { type: "review-dm-invite"; roomId: string }
   | { type: "accept-dm-invite"; roomId: string }
   | { type: "reject-dm-invite"; roomId: string }
   | { type: "create-dm" }
+  | { type: "home" }
   | { type: "logout" }
   | { type: "quit" };
 
@@ -37,6 +48,7 @@ export interface SelectHomeActionInput {
   accountUserId?: string;
   workspaces: HomeWorkspace[];
   directMessages: HomeDirectMessage[];
+  pendingWorkspaceInvites?: HomePendingWorkspaceInvite[];
   pendingDirectInvites?: HomePendingDirectInvite[];
   warnings?: string[];
 }
@@ -82,6 +94,18 @@ export async function selectHomeAction(
     return selectPendingDirectInviteAction(invite, io);
   }
 
+  if (action.type === "review-workspace-invite") {
+    const invite = home.pendingWorkspaceInvites?.find(
+      (item) => item.roomId === action.spaceId,
+    );
+
+    if (!invite) {
+      return { type: "quit" };
+    }
+
+    return selectPendingWorkspaceInviteAction(invite, io);
+  }
+
   if (action.type !== "view-all-workspaces") {
     return action;
   }
@@ -119,7 +143,10 @@ export async function selectWorkspaceAction(
       },
       {
         title: "Actions",
-        options: [{ label: "Quit", action: { type: "quit" } }],
+        options: [
+          { label: "Home", action: { type: "home" } },
+          { label: "Quit", action: { type: "quit" } },
+        ],
       },
     ],
     io,
@@ -128,6 +155,7 @@ export async function selectWorkspaceAction(
 
 function homeSections(home: SelectHomeActionInput): PickerSection[] {
   const pendingDirectInvites = home.pendingDirectInvites ?? [];
+  const pendingWorkspaceInvites = home.pendingWorkspaceInvites ?? [];
   const workspaceOptions: AnyPickerOption[] =
     home.workspaces.length === 0
       ? [{ label: "No workspaces", disabled: true }]
@@ -164,6 +192,19 @@ function homeSections(home: SelectHomeActionInput): PickerSection[] {
       options: pendingDirectInvites.slice(0, 5).map((invite) => ({
         label: `${invite.name} from ${invite.inviterUserId}`,
         action: { type: "review-dm-invite", roomId: invite.roomId } satisfies HomeAction,
+      })),
+    });
+  }
+
+  if (pendingWorkspaceInvites.length > 0) {
+    sections.push({
+      title: "Pending Workspace Invites",
+      options: pendingWorkspaceInvites.slice(0, 5).map((invite) => ({
+        label: `${invite.name} from ${invite.inviterUserId}`,
+        action: {
+          type: "review-workspace-invite",
+          spaceId: invite.roomId,
+        } satisfies HomeAction,
       })),
     });
   }
@@ -216,7 +257,42 @@ function selectPendingDirectInviteAction(
             label: "Reject",
             action: { type: "reject-dm-invite", roomId: invite.roomId },
           },
-          { label: "Cancel", action: { type: "quit" } },
+          { label: "Home", action: { type: "home" } },
+          { label: "Quit", action: { type: "quit" } },
+        ],
+      },
+    ],
+    io,
+  );
+}
+
+function selectPendingWorkspaceInviteAction(
+  invite: HomePendingWorkspaceInvite,
+  io: PickerIo,
+): Promise<HomeAction> {
+  return selectAction(
+    `Workspace Invite: ${invite.name}`,
+    [
+      {
+        title: "Invite",
+        options: [
+          { label: `From ${invite.inviterUserId}`, disabled: true },
+          { label: invite.roomId, disabled: true },
+        ],
+      },
+      {
+        title: "Actions",
+        options: [
+          {
+            label: "Accept",
+            action: { type: "accept-workspace-invite", spaceId: invite.roomId },
+          },
+          {
+            label: "Reject",
+            action: { type: "reject-workspace-invite", spaceId: invite.roomId },
+          },
+          { label: "Home", action: { type: "home" } },
+          { label: "Quit", action: { type: "quit" } },
         ],
       },
     ],
@@ -245,6 +321,7 @@ async function selectAction(
   let selectedIndex = 0;
 
   emitKeypressEvents(io.input);
+  io.input.resume();
   io.input.setRawMode(true);
   io.output.write("\x1b[?25l");
 

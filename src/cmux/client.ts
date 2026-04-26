@@ -2,12 +2,31 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+const CMUX_CALLER_ENV = new Set([
+  "CMUX_PANEL_ID",
+  "CMUX_PANE_ID",
+  "CMUX_SURFACE_ID",
+  "CMUX_TAB_ID",
+  "CMUX_WORKSPACE_ID",
+]);
 
 export interface CmuxSurface {
   ref: string;
   title?: string | null;
+  command?: string | null;
   pane_ref?: string | null;
   type?: string | null;
+}
+
+export interface CmuxSplitResult {
+  surfaceRef: string;
+  workspaceRef: string;
+}
+
+export interface CmuxSurfaceResult {
+  paneRef: string;
+  surfaceRef: string;
+  workspaceRef: string;
 }
 
 export interface CmuxPane {
@@ -77,10 +96,10 @@ export class CmuxClient {
   }
 
   async newSplit(
-    direction: "right" | "down",
+    direction: "left" | "right" | "up" | "down",
     options: { workspaceRef: string; surfaceRef: string },
-  ): Promise<void> {
-    await this.run([
+  ): Promise<CmuxSplitResult> {
+    const output = await this.run([
       "new-split",
       direction,
       "--workspace",
@@ -88,6 +107,30 @@ export class CmuxClient {
       "--surface",
       options.surfaceRef,
     ]);
+
+    return {
+      surfaceRef: requireRef(output, "surface"),
+      workspaceRef: requireRef(output, "workspace"),
+    };
+  }
+
+  async newSurface(options: {
+    paneRef: string;
+    workspaceRef: string;
+  }): Promise<CmuxSurfaceResult> {
+    const output = await this.run([
+      "new-surface",
+      "--workspace",
+      options.workspaceRef,
+      "--pane",
+      options.paneRef,
+    ]);
+
+    return {
+      paneRef: requireRef(output, "pane"),
+      surfaceRef: requireRef(output, "surface"),
+      workspaceRef: requireRef(output, "workspace"),
+    };
   }
 
   async respawnPane(options: {
@@ -95,6 +138,10 @@ export class CmuxClient {
     surfaceRef: string;
     command: string;
   }): Promise<void> {
+    const command = options.command.endsWith("\n")
+      ? options.command
+      : `${options.command}\n`;
+
     await this.run([
       "respawn-pane",
       "--workspace",
@@ -102,7 +149,7 @@ export class CmuxClient {
       "--surface",
       options.surfaceRef,
       "--command",
-      options.command,
+      command,
     ]);
   }
 
@@ -128,7 +175,24 @@ export class CmuxClient {
   }
 
   async selectWorkspace(workspaceRef: string): Promise<void> {
+    await this.setAppFocusActive();
     await this.run(["select-workspace", "--workspace", workspaceRef]);
+  }
+
+  async readScreen(options: {
+    workspaceRef: string;
+    surfaceRef: string;
+    lines?: number;
+  }): Promise<string> {
+    return await this.run([
+      "read-screen",
+      "--workspace",
+      options.workspaceRef,
+      "--surface",
+      options.surfaceRef,
+      "--lines",
+      String(options.lines ?? 24),
+    ]);
   }
 
   async resizePane(options: {
@@ -153,6 +217,7 @@ export class CmuxClient {
     try {
       const { stdout } = await execFileAsync(this.binary, args, {
         encoding: "utf8",
+        env: cmuxControlEnv(),
         maxBuffer: 10 * 1024 * 1024,
       });
 
@@ -167,6 +232,26 @@ export class CmuxClient {
       throw error;
     }
   }
+
+  private async setAppFocusActive(): Promise<void> {
+    try {
+      await this.run(["set-app-focus", "active"]);
+    } catch {
+      // Older cmux builds may not support app focus overrides.
+    }
+  }
+}
+
+function cmuxControlEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!CMUX_CALLER_ENV.has(key) && value !== undefined) {
+      env[key] = value;
+    }
+  }
+
+  return env;
 }
 
 export function getWorkspaces(tree: CmuxTree): CmuxWorkspace[] {
@@ -196,6 +281,16 @@ export function findSurfacePane(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function requireRef(output: string, prefix: string): string {
+  const match = output.match(new RegExp(`\\b${prefix}:\\d+\\b`));
+
+  if (!match) {
+    throw new Error(`Unable to parse ${prefix} ref from cmux output: ${output}`);
+  }
+
+  return match[0];
 }
 
 function isExecError(

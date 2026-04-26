@@ -60,6 +60,10 @@ export class WorkspaceController {
   async openRoom(roomId: string): Promise<void> {
     const existing = this.openedRooms.get(roomId);
 
+    if (existing) {
+      await this.respawnRoom(roomId, existing.surfaceRef);
+    }
+
     if (existing && (await this.tryFocus(existing))) {
       this.lastRoomSurfaceRef = existing.surfaceRef;
       return;
@@ -96,13 +100,7 @@ export class WorkspaceController {
       throw new Error(`cmux surface ${newSurface.ref} has no containing pane.`);
     }
 
-    const command = `${shellQuote(this.nuggetCommand)} room ${shellQuote(roomId)}`;
-
-    await this.cmux.respawnPane({
-      command,
-      surfaceRef: newSurface.ref,
-      workspaceRef: this.workspaceRef,
-    });
+    await this.respawnRoom(roomId, newSurface.ref);
 
     const paneSurface = { paneRef, surfaceRef: newSurface.ref };
     this.openedRooms.set(roomId, paneSurface);
@@ -135,6 +133,17 @@ export class WorkspaceController {
     } catch {
       return false;
     }
+  }
+
+  private async respawnRoom(roomId: string, surfaceRef: string): Promise<void> {
+    await this.cmux.respawnPane({
+      command:
+        `CMUX_WORKSPACE_ID=${shellQuote(this.workspaceRef)} ` +
+        `CMUX_SURFACE_ID=${shellQuote(surfaceRef)} ` +
+        `${shellQuote(this.nuggetCommand)} room ${shellQuote(roomId)}`,
+      surfaceRef,
+      workspaceRef: this.workspaceRef,
+    });
   }
 }
 
@@ -213,23 +222,24 @@ function findNuggetWorkspace(
 }
 
 function workspaceScore(workspace: CmuxWorkspace, spaceId: string): number {
-  const surfaceTitles = getWorkspaceSurfaces(workspace).map((surface) => surface.title ?? "");
   let score = 0;
 
   if (workspace.description === workspaceDescription(spaceId)) {
+    score += 1000;
+  }
+
+  if (findWorkspaceControllerSurface(workspace, spaceId)) {
     score += 100;
+  } else if (findWorkspaceControllerSurface(workspace)) {
+    score += 50;
   }
 
-  if (surfaceTitles.some((title) => title.includes("workspace-controller"))) {
-    score += 20;
-  }
-
-  if (surfaceTitles.some((title) => title.includes("nugget room"))) {
-    score += 10;
+  if (hasNuggetRoomSurface(workspace)) {
+    score += 25;
   }
 
   if (workspace.active || workspace.selected) {
-    score += 5;
+    score += 10;
   }
 
   score += workspace.panes?.length ?? 0;
@@ -241,24 +251,40 @@ async function ensureWorkspaceController(
   workspace: CmuxWorkspace,
   spaceId: string,
 ): Promise<CmuxPaneSurfaceRef> {
-  const existing = getWorkspaceSurfaces(workspace).find((surface) =>
-    (surface.title ?? "").includes("workspace-controller"),
-  );
-  const targetSurface = existing ?? firstTerminalSurface(workspace);
+  const existing = findWorkspaceControllerSurface(workspace, spaceId);
+  const targetSurface = existing ?? (await createPickerSurface(cmux, workspace));
 
   if (!targetSurface) {
-    throw new Error(`cmux workspace ${workspace.ref} has no terminal surface.`);
+    throw new Error(`cmux workspace ${workspace.ref} has no surface for the workspace picker.`);
   }
 
-  const paneRef = findSurfacePane(workspace, targetSurface.ref)?.paneRef;
+  let paneRef = findSurfacePane(workspace, targetSurface.ref)?.paneRef;
+
+  if (!paneRef) {
+    const refreshedWorkspace = findWorkspace(
+      await cmux.tree({ all: true }),
+      workspace.ref,
+    );
+    paneRef = refreshedWorkspace
+      ? findSurfacePane(refreshedWorkspace, targetSurface.ref)?.paneRef
+      : undefined;
+  }
 
   if (!paneRef) {
     throw new Error(`cmux surface ${targetSurface.ref} has no containing pane.`);
   }
 
+  if (
+    existing &&
+    (await isWorkspacePickerVisible(cmux, workspace.ref, targetSurface.ref))
+  ) {
+    return { paneRef, surfaceRef: targetSurface.ref };
+  }
+
   const command =
     `CMUX_WORKSPACE_ID=${shellQuote(workspace.ref)} ` +
     `CMUX_SURFACE_ID=${shellQuote(targetSurface.ref)} ` +
+    "NUGGET_IGNORE_INITIAL_ENTER=1 " +
     `${shellQuote(defaultNuggetCommand())} workspace-controller ${shellQuote(spaceId)}`;
 
   await cmux.respawnPane({
@@ -268,6 +294,28 @@ async function ensureWorkspaceController(
   });
 
   return { paneRef, surfaceRef: targetSurface.ref };
+}
+
+async function createPickerSurface(
+  cmux: CmuxClient,
+  workspace: CmuxWorkspace,
+): Promise<{ ref: string; type?: string | null } | null> {
+  const firstSurface = firstTerminalSurface(workspace);
+
+  if (!firstSurface) {
+    return null;
+  }
+
+  if (!hasNuggetRoomSurface(workspace) && !findWorkspaceControllerSurface(workspace)) {
+    return firstSurface;
+  }
+
+  const split = await cmux.newSplit("left", {
+    surfaceRef: firstSurface.ref,
+    workspaceRef: workspace.ref,
+  });
+
+  return { ref: split.surfaceRef };
 }
 
 function firstTerminalSurface(workspace: CmuxWorkspace) {
@@ -286,6 +334,38 @@ function requiredWorkspace(tree: CmuxTree, workspaceRef: string): CmuxWorkspace 
 
 function isRoomSurface(title: string, roomId: string): boolean {
   return title.includes(roomId) && title.includes("room");
+}
+
+function findWorkspaceControllerSurface(
+  workspace: CmuxWorkspace,
+  spaceId?: string,
+): { ref: string; type?: string | null } | null {
+  return (
+    getWorkspaceSurfaces(workspace).find((surface) => {
+      const title = surface.title ?? "";
+      return title.includes("workspace-controller") && (!spaceId || title.includes(spaceId));
+    }) ?? null
+  );
+}
+
+function hasNuggetRoomSurface(workspace: CmuxWorkspace): boolean {
+  return getWorkspaceSurfaces(workspace).some((surface) => {
+    const title = surface.title ?? "";
+    return title.includes("nugget") && /\broom\b/.test(title);
+  });
+}
+
+async function isWorkspacePickerVisible(
+  cmux: CmuxClient,
+  workspaceRef: string,
+  surfaceRef: string,
+): Promise<boolean> {
+  try {
+    const screen = await cmux.readScreen({ workspaceRef, surfaceRef, lines: 24 });
+    return screen.includes("Workspace:") && screen.includes("Enter opens");
+  } catch {
+    return false;
+  }
 }
 
 function workspaceDescription(spaceId: string): string {
