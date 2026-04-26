@@ -81,20 +81,13 @@ export async function createDirectRoom(
   const targetUserId = validateUserId(userId);
 
   const response = await client.createRoom({
+    invite: [targetUserId],
     is_direct: true,
     preset: Preset.PrivateChat,
     visibility: Visibility.Private,
   });
 
   const roomId = response.room_id;
-
-  try {
-    await client.invite(roomId, targetUserId);
-  } catch (error) {
-    throw new Error(
-      `Created DM room ${roomId}, but could not invite ${targetUserId}: ${formatError(error)}`,
-    );
-  }
 
   try {
     await addDirectRoomAccountData(client, targetUserId, roomId);
